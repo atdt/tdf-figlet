@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>TDF Figlet Designer</title>
+    <style>
+        /* Styles optimized for clarity and compactness */
+        body {
+            font-family: 'Courier New', Courier, monospace; background-color: #1a1a1a; color: #ccc;
+            margin: 0; padding: 0; display: flex; flex-direction: column; height: 100vh; overflow: hidden;
+        }
+        header.controls {
+            background-color: #2a2a2a; padding: 8px 15px; border-bottom: 1px solid #444;
+            display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; justify-content: center;
+            width: 100%; box-sizing: border-box; z-index: 10; flex-shrink: 0;
+        }
+        textarea {
+            height: 35px; flex-basis: auto; flex-grow: 1; min-width: 150px; padding: 6px;
+            border-radius: 0; border: 1px solid #555; background-color: #111; color: #eee;
+            font-family: inherit; resize: vertical; font-size: 0.9em;
+        }
+        select, button, input[type="number"], label {
+            font-size: 0.8em; padding: 5px 8px; border-radius: 0; border: 1px solid #555;
+            background-color: #3a3a3a; color: #eee; font-family: inherit; vertical-align: middle;
+        }
+        button { cursor: pointer; } button:hover { background-color: #4a4a4a; } button:disabled { cursor: not-allowed; opacity: 0.6; }
+        label { border: none; background: none; padding: 0 3px 0 0; cursor: default; }
+        input[type="checkbox"], input[type="radio"] { margin-right: 3px; cursor: pointer; vertical-align: middle; }
+        label[for^="filter-"], label[for^="random-"], label[for^="align-"] { cursor: pointer; padding-right: 8px; }
+        #font-select { min-width: 150px; max-width: 200px; flex-grow: 1; }
+        #min-space { width: 3em; padding: 5px; }
+        .option-group { display: flex; align-items: center; gap: 5px; flex-wrap: nowrap; padding: 2px 5px; border: 1px solid #444; }
+        main { flex-grow: 1; width: 100%; display: flex; flex-direction: column; overflow: hidden; }
+        #status { padding: 4px 20px; font-style: italic; color: #777; height: 1.2em; font-size: 0.8em; text-align: center; flex-shrink: 0; border-bottom: 1px solid #333; }
+        #canvas-container { flex-grow: 1; width: 100%; overflow-y: auto; display: flex; flex-direction: column; align-items: center; gap: 15px; padding: 15px 0; box-sizing: border-box; }
+        canvas { display: block; border: 1px dashed #444; background-color: #000; image-rendering: pixelated; max-width: 100%; padding: 20px; /* User specified 20px */ box-sizing: border-box; margin: auto; }
+        .font-block { width: 95%; max-width: 1000px; text-align: center; border-bottom: 1px solid #333; padding-bottom: 15px; }
+        .font-block p { margin: 5px 0 8px 0; font-size: 0.85em; color: #888; font-family: inherit; }
+        .font-placeholder { width: 95%; max-width: 1000px; border: 1px dashed #333; background-color: #222; display: flex; align-items: center; justify-content: center; color: #555; font-size: 0.8em; text-align: center; border-bottom: 1px solid #333; padding-bottom: 15px; box-sizing: border-box; font-family: inherit; }
+        .font-placeholder::before { content: attr(data-font-key); }
+        .error { color: #ff6b6b; }
+        footer { padding: 8px 15px; text-align: center; font-size: 0.75em; color: #666; border-top: 1px solid #333; flex-shrink: 0; }
+        footer a { color: #88a; text-decoration: none; } footer a:hover { text-decoration: underline; }
+    </style>
+    <script src="cp437font.js" defer></script>
+    <script src="tdfRenderer.js" defer></script>
+    <script type="module" defer>
+        // --- DOM Elements ---
+        const elements = {
+             textInput: document.getElementById('text-input'), fontSelect: document.getElementById('font-select'),
+             showAllButton: document.getElementById('show-all-button'),
+             canvasContainer: document.getElementById('canvas-container'), statusDiv: document.getElementById('status'),
+             filterCharsCheckbox: document.getElementById('filter-chars'), randomOrderCheckbox: document.getElementById('random-order'),
+             minSpaceInput: document.getElementById('min-space'),
+             textAlignRadios: document.querySelectorAll('input[name="text-align"]')
+        };
+
+        // --- App State ---
+        let isReady = false;
+        let masterFontList = [];
+        let currentFilteredFontList = [];
+        let intersectionObserver = null;
+        const SINGLE_FONT_BLOCK_ID = 'single-font-render-block'; // ** FIX: Define Constant **
+
+        // --- Utility Functions ---
+        function setStatus(message, isError = false) {
+            if (elements.statusDiv) { elements.statusDiv.textContent = message; elements.statusDiv.className = isError ? 'error' : ''; }
+            if (isError) console.error("Status:", message);
+        }
+        function setControlsEnabled(enabled) {
+             elements.textInput.disabled = !enabled; elements.fontSelect.disabled = !enabled;
+             elements.showAllButton.disabled = !enabled; elements.filterCharsCheckbox.disabled = !enabled;
+             elements.randomOrderCheckbox.disabled = !enabled; elements.minSpaceInput.disabled = !enabled;
+             elements.textAlignRadios.forEach(r => r.disabled = !enabled); isReady = enabled;
+         }
+        function getMinSpaceWidth() { const v=parseInt(elements.minSpaceInput.value,10); return isNaN(v)||v<0?3:v; } // Uses default 3
+        function shuffleArray(arr) { for(let i=arr.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [arr[i],arr[j]]=[arr[j],arr[i]]; } return arr; }
+        function getSelectedTextAlign() { return document.querySelector('input[name="text-align"]:checked')?.value || 'left'; }
+
+        // --- Core Functions ---
+        async function initialize() {
+            setStatus('Initializing...'); setControlsEnabled(false);
+            // Check external font data
+            if (typeof globalThis.cp437font === 'undefined') {
+                 await new Promise(resolve => setTimeout(resolve, 50)); // Short delay for script loading
+                 if (typeof globalThis.cp437font === 'undefined') { setStatus('Error: cp437font data missing.', true); return; }
+            }
+            if (typeof tdfRenderer === 'undefined') { setStatus('tdfRenderer library not found.', true); return; }
+            try {
+                const bundleUrl = 'tdf_bundle.bin'; // Path to your font bundle
+                masterFontList = await tdfRenderer.init(bundleUrl);
+                if (masterFontList.length === 0) { setStatus('No fonts found in bundle.', true); return; }
+                updateFontDropdown(); setControlsEnabled(true);
+                setStatus(`Ready (${masterFontList.length} fonts).`);
+                await renderSingleFont(); // Render initial view
+            } catch (error) { setStatus(`Initialization failed: ${error.message}`, true); console.error(error); }
+        }
+
+        /** Updates font dropdown based on filter/text */
+        function updateFontDropdown() {
+            if (!isReady && masterFontList.length === 0) return;
+            const filterActive = elements.filterCharsCheckbox.checked; const text = elements.textInput.value;
+            currentFilteredFontList = filterActive ? tdfRenderer.filterFontsByText(text) : masterFontList;
+            const currentSelectedValue = elements.fontSelect.value; elements.fontSelect.innerHTML = '';
+            if (currentFilteredFontList.length === 0) {
+                 const opt = document.createElement('option'); opt.value=""; opt.textContent=filterActive?"No matching fonts":"No fonts"; elements.fontSelect.appendChild(opt); elements.fontSelect.disabled = true;
+            } else {
+                 currentFilteredFontList.forEach(key => { const opt = document.createElement('option'); opt.value=key; opt.textContent=key.includes('_')?key.substring(key.indexOf('_')+1):key; elements.fontSelect.appendChild(opt); });
+                 if (currentFilteredFontList.includes(currentSelectedValue)) elements.fontSelect.value = currentSelectedValue; else if (currentFilteredFontList.length > 0) elements.fontSelect.value = currentFilteredFontList[0];
+                 elements.fontSelect.disabled = false;
+            }
+            elements.showAllButton.disabled = currentFilteredFontList.length === 0;
+        }
+
+        /** Renders the currently selected font */
+        async function renderSingleFont() {
+            if (!isReady) return;
+            const text = elements.textInput.value; const key = elements.fontSelect.value;
+            // Clear placeholder view if active
+            if (intersectionObserver) { intersectionObserver.disconnect(); intersectionObserver = null; elements.canvasContainer.innerHTML = ''; }
+            // Clear display if no text or font selected
+            if (!text || !key) { const block = document.getElementById(SINGLE_FONT_BLOCK_ID); if (block) block.remove(); return; }
+
+            setStatus(`Rendering ${key}...`);
+            try {
+                const options = { uniqueFontKey: key, text, textAlign: getSelectedTextAlign(), bgColor: [0,0,0,255], minSpaceWidth: getMinSpaceWidth() };
+                const result = await tdfRenderer.render(options);
+                let block = document.getElementById(SINGLE_FONT_BLOCK_ID); let label, canvasDiv;
+                if (!block) { // Create block structure if it doesn't exist
+                    block = document.createElement('div'); block.className = 'font-block'; block.id = SINGLE_FONT_BLOCK_ID;
+                    label = document.createElement('p'); block.appendChild(label);
+                    canvasDiv = document.createElement('div'); block.appendChild(canvasDiv); // Container for canvas replacement
+                    elements.canvasContainer.appendChild(block);
+                } else { // Find existing elements
+                    label = block.querySelector('p'); canvasDiv = block.querySelector('div') || block;
+                }
+                if(label) label.textContent = key;
+                canvasDiv.innerHTML = ''; // Clear previous canvas
+                canvasDiv.appendChild(result.canvas); // Add new canvas
+                setStatus(`Rendered ${result.canvas.width}x${result.canvas.height}`);
+            } catch (error) {
+                 setStatus(`Rendering failed: ${error.message}`, true); console.error(error);
+                 const block = document.getElementById(SINGLE_FONT_BLOCK_ID);
+                 if (block) block.innerHTML = `<p class="error">Render failed: ${key}</p>`; // Show error in block
+            }
+        }
+
+        /** Sets up IntersectionObserver for virtual rendering */
+        function setupIntersectionObserver() {
+             const options = { root: elements.canvasContainer, rootMargin: '0px 0px 300px 0px', threshold: 0.01 }; // Increased rootMargin slightly
+             intersectionObserver = new IntersectionObserver((entries, observer) => {
+                 entries.forEach(entry => {
+                     if (entry.isIntersecting) {
+                         const placeholder = entry.target; const fontKey = placeholder.dataset.fontKey;
+                         if (fontKey && !placeholder.dataset.rendered) { // Check if not already rendering/rendered
+                              placeholder.dataset.rendered = 'true'; // Mark as rendering started
+                              renderFontInPlaceholder(placeholder, fontKey);
+                              observer.unobserve(placeholder);
+                         }
+                     }
+                 });
+             }, options);
+         }
+
+         /** Renders a font and replaces its placeholder div */
+        async function renderFontInPlaceholder(placeholderElement, uniqueFontKey) {
+             const text = elements.textInput.value; if (!text) return;
+             const minSpaceWidth = getMinSpaceWidth(); const align = getSelectedTextAlign();
+             try {
+                 const opts = { uniqueFontKey:uniqueFontKey, text, textAlign:align, bgColor:[0,0,0,255], minSpaceWidth };
+                 const result = await tdfRenderer.render(opts);
+                 const block = document.createElement('div'); block.className='font-block';
+                 const p = document.createElement('p'); p.textContent=uniqueFontKey;
+                 block.appendChild(p); block.appendChild(result.canvas);
+                 placeholderElement.replaceWith(block);
+             } catch (error) { console.error(`Placeholder render fail ${uniqueFontKey}:`, error); placeholderElement.textContent=`Error: ${uniqueFontKey}`; placeholderElement.classList.add('error'); }
+        }
+
+        /** Creates placeholders for all fonts to be displayed */
+        function displayAllFontsPlaceholders() {
+            if (!isReady) { setStatus('Not ready.', true); return; }
+            const text = elements.textInput.value; if (!text) { setStatus('Enter text.'); return; }
+
+            const filterActive = elements.filterCharsCheckbox.checked;
+            const useRandomOrder = elements.randomOrderCheckbox.checked;
+            let fontsToDisplay = filterActive ? tdfRenderer.filterFontsByText(text) : [...masterFontList];
+            if (fontsToDisplay.length === 0) { setStatus(filterActive ? "No fonts match." : "No fonts available.", true); return; }
+            if (useRandomOrder) { shuffleArray(fontsToDisplay); }
+
+            setStatus(`Showing ${fontsToDisplay.length} fonts (scroll to view)...`);
+            setControlsEnabled(false); // Disable controls during setup
+            elements.canvasContainer.innerHTML = ''; // Clear container
+
+            if (intersectionObserver) intersectionObserver.disconnect();
+            setupIntersectionObserver();
+
+            const minSpaceWidth = getMinSpaceWidth();
+
+            // Batch placeholder creation for potentially better performance
+            const fragment = document.createDocumentFragment();
+            fontsToDisplay.forEach(uniqueFontKey => {
+                const layout = tdfRenderer.calculateLayout(uniqueFontKey, text, minSpaceWidth);
+                const estimatedHeight = (layout ? layout.height : CHAR_HEIGHT) + 40; // Added padding for label/border
+                const placeholder = document.createElement('div');
+                placeholder.className = 'font-placeholder';
+                placeholder.dataset.fontKey = uniqueFontKey;
+                placeholder.style.height = `${estimatedHeight}px`;
+                fragment.appendChild(placeholder);
+                intersectionObserver.observe(placeholder);
+            });
+            elements.canvasContainer.appendChild(fragment); // Append all placeholders at once
+
+            setControlsEnabled(true); // Re-enable controls
+        }
+
+        // --- Event Listeners ---
+        elements.showAllButton.addEventListener('click', displayAllFontsPlaceholders);
+        elements.filterCharsCheckbox.addEventListener('change', () => { updateFontDropdown(); renderSingleFont(); });
+        elements.randomOrderCheckbox.addEventListener('change', () => {/* Affects next "Show All" */});
+        elements.minSpaceInput.addEventListener('change', renderSingleFont);
+        elements.fontSelect.addEventListener('change', renderSingleFont);
+        elements.textAlignRadios.forEach(radio => radio.addEventListener('change', renderSingleFont));
+        let debounceTimer;
+        elements.textInput.addEventListener('input', () => { clearTimeout(debounceTimer); updateFontDropdown(); debounceTimer = setTimeout(renderSingleFont, 300); });
+
+        // --- Initial Load ---
+        initialize();
+
+    </script>
+</head>
+<body>
+    <header class="controls">
+        <textarea id="text-input" placeholder="Enter text..." title="Text to Render">ANSI LIVES</textarea>
+        <select id="font-select" title="Select Font" disabled>
+            <option value="">Loading...</option>
+        </select>
+        <button id="show-all-button" disabled title="Display All Fonts (Renders on Scroll)">Show All Fonts</button>
+         <div class="option-group">
+             <input type="checkbox" id="filter-chars" title="Only show fonts that include every character in the input text (excluding space)" disabled><label for="filter-chars">Require Chars</label>
+        </div>
+         <div class="option-group">
+             <input type="checkbox" id="random-order" title="Display 'Show All' list in random order" disabled><label for="random-order">Random</label>
+        </div>
+         <div class="option-group">
+            <label for="min-space">Space:</label><input type="number" id="min-space" value="3" min="0" max="10" title="Min width (chars) for fonts missing space glyph" disabled>
+         </div>
+         <div class="option-group">
+              <label>Align:</label>
+              <input type="radio" name="text-align" id="align-left" value="left" checked title="Align text left" disabled><label for="align-left">Left</label>
+              <input type="radio" name="text-align" id="align-center" value="center" title="Align text center" disabled><label for="align-center">Center</label>
+              <input type="radio" name="text-align" id="align-right" value="right" title="Align text right" disabled><label for="align-right">Right</label>
+         </div>
+    </header>
+    <main>
+        <div id="status">Loading script...</div>
+        <div id="canvas-container">
+            </div>
+    </main>
+    <footer>
+        TDF Figlet | <a href="https://github.com/atdt/tdf-figlet" target="_blank" rel="noopener noreferrer">GitHub</a> </footer>
+</body>
+</html>
