@@ -38,7 +38,7 @@
 
     // --- Internal State ---
     let _bundleBuffer = null; let _bundleView = null;
-    let _fontIndex = []; // Array of { key: string, dataOffset: number } - sorted
+    let _fontIndex = new Map(); // Map of key: string to dataOffset: number
     let _stringPoolOffset = 0; let _fontDataPoolOffset = 0;
     let _isInitialized = false;
 
@@ -88,19 +88,6 @@
         const stringBytes = new Uint8Array(dataView.buffer, dataView.byteOffset + startOffset, endOffset - startOffset);
         try { return new TextDecoder().decode(stringBytes); }
         catch (e) { try { return String.fromCharCode.apply(null, stringBytes); } catch { return ""; } } // Fallback
-    }
-
-    /** Performs binary search on the _fontIndex to find entry by key */
-    function findFontIndexEntry(uniqueFontKey) {
-        if (!_isInitialized) return null;
-        let low = 0; let high = _fontIndex.length - 1;
-        while (low <= high) {
-            const mid = Math.floor((low + high) / 2); const midKey = _fontIndex[mid].key;
-            const comparison = uniqueFontKey.localeCompare(midKey);
-            if (comparison === 0) return _fontIndex[mid];
-            if (comparison < 0) high = mid - 1; else low = mid + 1;
-        }
-        return null;
     }
 
     /** Binary search within a font's Glyph Lookup Table */
@@ -251,16 +238,15 @@
         _stringPoolOffset = _bundleView.getUint32(13, true); _fontDataPoolOffset = _bundleView.getUint32(17, true);
         if (indexOffset >= _bundleBuffer.byteLength || _stringPoolOffset >= _bundleBuffer.byteLength || _fontDataPoolOffset >= _bundleBuffer.byteLength) throw new Error("Invalid offsets in bundle header.");
         // Parse Font Index Table and store with keys
-        _fontIndex = [];
+        _fontIndex = new Map();
         for (let i = 0; i < fontCount; i++) {
             const entryOffset = indexOffset + i * 8; if (entryOffset + 8 > _bundleBuffer.byteLength) throw new Error("Index table truncated.");
             const keyOffset = _bundleView.getUint32(entryOffset, true); const dataOffset = _bundleView.getUint32(entryOffset + 4, true);
             const key = readNullTerminatedString(_bundleView, _stringPoolOffset + keyOffset);
             if (key) { // Ensure key is valid before adding
-                 _fontIndex.push({ key: key, dataOffset: dataOffset });
+                 _fontIndex.set(key, dataOffset);
             } else { console.warn(`Empty key found at index ${i}`); }
         }
-        _fontIndex.sort((a, b) => a.key.localeCompare(b.key)); // Ensure sorted
         _isInitialized = true;
         return tdfRenderer.getAvailableFonts();
     };
@@ -271,15 +257,16 @@
     /** Returns a sorted array of unique font keys available in the loaded bundle. */
     tdfRenderer.getAvailableFonts = function() {
         // Keys are already sorted during init
-        return _isInitialized ? _fontIndex.map(entry => entry.key) : [];
+        return _isInitialized ? Array.from(_fontIndex.keys()) : [];
     };
 
     /** Calculates overall layout dimensions for potentially multiline TDF text. */
     tdfRenderer.calculateLayout = function(uniqueFontKey, text, minSpaceWidth = DEFAULT_MIN_SPACE_WIDTH) {
          if (!_isInitialized || !_bundleView) { console.error("tdfRenderer not initialized."); return null; }
          if (!text) return { width: CHAR_WIDTH, height: CHAR_HEIGHT };
-         const fontIndexEntry = findFontIndexEntry(uniqueFontKey); if (!fontIndexEntry) { console.error(`Font key not found: ${uniqueFontKey}`); return null; }
-         const fontDataOffset = fontIndexEntry.dataOffset; // Relative offset in pool
+         const fontDataOffset = _fontIndex.get(uniqueFontKey);
+         if (typeof fontDataOffset === "undefined") { console.error(`Font key not found: ${uniqueFontKey}`); return null; }
+
          const fontSpacing = _bundleView.getUint8(_fontDataPoolOffset + fontDataOffset);
 
          const lines = text.split('\n'); let overallMaxWidth = 0; let totalHeight = 0;
@@ -294,21 +281,25 @@
      /** Filters available fonts based on whether they support all non-space, supported characters in the input text. */
      tdfRenderer.filterFontsByText = function(text) {
          if (!_isInitialized || !_bundleView) { console.warn("tdfRenderer not initialized for filter."); return []; }
-         if (!text) return tdfRenderer.getAvailableFonts();
+         if (!text) return Array.from(_fontIndex.keys());
 
          // Filter required chars to only those potentially supported by TDF
          const requiredChars = [...new Set(text.split(''))]
                                .filter(char => char !== ' ' && char !== '\n' && SUPPORTED_CHAR_LIST.includes(char));
 
-         if (requiredChars.length === 0) return tdfRenderer.getAvailableFonts(); // Return all if only spaces/newlines/unsupported chars
+         if (requiredChars.length === 0) return Array.from(_fontIndex.keys()); // Return all if only spaces/newlines/unsupported chars
 
-         return _fontIndex.filter(entry => {
-             const fontDataOffset = entry.dataOffset; // Relative offset in pool
+         const filteredKeys = [];
+         for (const [key, fontDataOffset] of _fontIndex.entries()) {
              // Check if all required characters have a defined glyph
-             return requiredChars.every(char => {
+             const supportsAllChars = requiredChars.every(char => {
                  return parseGlyphDataOnDemand(_fontDataPoolOffset, fontDataOffset, char.charCodeAt(0)) !== null;
              });
-         }).map(entry => entry.key);
+             if (supportsAllChars) {
+                 filteredKeys.push(key);
+             }
+         }
+         return filteredKeys;
      };
 
     /**
@@ -329,9 +320,9 @@
         const canCreateCanvas = typeof document !== 'undefined' && typeof document.createElement === 'function';
         if (!options.canvas && !canCreateCanvas) throw new Error("options.canvas required in non-browser.");
 
-        const fontIndexEntry = findFontIndexEntry(options.uniqueFontKey);
-        if (!fontIndexEntry) throw new Error(`Font key not found: ${options.uniqueFontKey}`);
-        const fontDataOffset = fontIndexEntry.dataOffset; // Relative offset in pool
+        const fontDataOffset = _fontIndex.get(options.uniqueFontKey);
+        if (typeof fontDataOffset === "undefined") throw new Error(`Font key not found: ${options.uniqueFontKey}`);
+
         const fontSpacing = _bundleView.getUint8(_fontDataPoolOffset + fontDataOffset);
 
         const minSpaceWidth = (options.minSpaceWidth >= 0) ? options.minSpaceWidth : DEFAULT_MIN_SPACE_WIDTH;
