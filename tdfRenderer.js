@@ -1,7 +1,7 @@
-// tdfRenderer.js v1.9 (Optimized layout calculation)
+// tdfRenderer.js v1.10 (Optimized layout metrics lookup)
 // TheDraw Font (.TDF) text rendering library for HTML Canvas
 // Uses preprocessed BINARY font bundle.
-// Copyright (C) 2012-2024 Ori Livneh & Contributors
+// Copyright (C) 2012-2025 Ori Livneh & Contributors
 // Licensed under the MIT and GPL licenses
 
 (function (global) {
@@ -50,7 +50,7 @@
             const response = await fetch(url);
             if (!response.ok) throw new Error(`HTTP error! Status: ${response.status} fetching ${url}`);
             return await response.arrayBuffer();
-        } catch (error) { console.error(`Fetch binary error from ${url}:`, error); throw error; }
+        } catch (error) { console.error(`Workspace binary error from ${url}:`, error); throw error; }
     }
 
     /** Draws a single CP437 character */
@@ -116,7 +116,32 @@
          return compactData;
     }
 
-    /** Parses glyph W/H and data stream on demand */
+    /** Gets precalculated glyph width and height WITHOUT parsing the stream. Used for layout. */
+    function _getGlyphLayoutMetricsOnly(fontDataPoolOffset, fontDataOffsetInPool, charCode) {
+        if (!_bundleView) return null;
+        const baseFontDataOffset = fontDataPoolOffset + fontDataOffsetInPool;
+        try {
+            const glyphCount = _bundleView.getUint8(baseFontDataOffset + 1); if (glyphCount === 0) return null;
+            const lookupTableOffset = baseFontDataOffset + 2; const glyphDataTableOffset = lookupTableOffset + glyphCount * 3;
+            const glyphDataRelativeOffset = _findGlyphOffsetInTable(lookupTableOffset, glyphCount, charCode);
+            if (glyphDataRelativeOffset === -1) return null; // Glyph not defined
+
+            const absoluteGlyphDataOffset = glyphDataTableOffset + glyphDataRelativeOffset;
+            if (absoluteGlyphDataOffset + 2 > _bundleView.byteLength) return null; // Bounds check
+
+            const width = _bundleView.getUint8(absoluteGlyphDataOffset); // Precalculated Width
+            const height = _bundleView.getUint8(absoluteGlyphDataOffset + 1); // Precalculated Height (in lines)
+
+            // Return format: { width, height_lines }
+            return { width: width, height: height };
+        } catch (e) {
+            // Avoid console spam for layout checks, only log if needed for debugging
+            // console.error(`Layout metrics lookup error char ${charCode} font offset ${fontDataOffsetInPool}:`, e);
+            return null;
+        }
+    }
+
+    /** Parses glyph W/H and data stream on demand. Used for rendering. */
     function parseGlyphDataOnDemand(fontDataPoolOffset, fontDataOffsetInPool, charCode) {
         if (!_bundleView) return null;
         const baseFontDataOffset = fontDataPoolOffset + fontDataOffsetInPool;
@@ -130,42 +155,41 @@
             const width = _bundleView.getUint8(absoluteGlyphDataOffset); // Precalculated Width
             const height = _bundleView.getUint8(absoluteGlyphDataOffset + 1); // Precalculated Height (in lines)
             const streamStartOffset = absoluteGlyphDataOffset + 2;
+            // **This is the part skipped by _getGlyphLayoutMetricsOnly**
             const streamData = _parseGlyphByteStream(streamStartOffset);
             // Return format: [width, height_lines, ...streamData]
             return [width, height, ...streamData];
         } catch (e) { console.error(`Glyph parse error char ${charCode} font offset ${fontDataOffsetInPool}:`, e); return null; }
     }
 
-    /** Calculates layout metrics for a single character using precalculated height */
+    /** Calculates layout metrics for a single character using precalculated dimensions */
     function _getCharLayoutMetrics(fontDataOffset, char, minSpaceWidth) {
         let charWidthPx = 0;
         let charHeightPx = CHAR_HEIGHT; // Default canvas cell height
         let isDefined = false;
         const charCode = char.charCodeAt(0);
-        let glyphData = null; // Holds [width, height_lines, ...stream]
+        let glyphMetrics = null; // Holds { width, height }
 
         if (char === ' ') {
-            // Attempt to get data for space char (ASCII 32)
-            glyphData = parseGlyphDataOnDemand(_fontDataPoolOffset, fontDataOffset, 32);
-            if (glyphData) { // Space glyph is defined
-                charWidthPx = glyphData[0] * CHAR_WIDTH; // Use precalculated width
-                // Use precalculated height (lines) * CHAR_HEIGHT for pixel height
-                charHeightPx = Math.max(1, glyphData[1]) * CHAR_HEIGHT; // Ensure min 1 line height
+            // Attempt to get metrics for space char (ASCII 32) using the lightweight lookup
+            glyphMetrics = _getGlyphLayoutMetricsOnly(_fontDataPoolOffset, fontDataOffset, 32);
+            if (glyphMetrics) { // Space glyph metrics found
+                charWidthPx = glyphMetrics.width * CHAR_WIDTH;
+                charHeightPx = Math.max(1, glyphMetrics.height) * CHAR_HEIGHT; // Ensure min 1 line height
             } else { // Space glyph not defined, use minimum width
                 charWidthPx = minSpaceWidth * CHAR_WIDTH;
                 // Height remains default CHAR_HEIGHT
             }
             isDefined = true; // Treat space as always defined for layout purposes
         } else {
-            // Attempt to get data for non-space character
-            glyphData = parseGlyphDataOnDemand(_fontDataPoolOffset, fontDataOffset, charCode);
-            if (glyphData) { // Character is defined
-                charWidthPx = glyphData[0] * CHAR_WIDTH; // Use precalculated width
-                // Use precalculated height (lines) * CHAR_HEIGHT for pixel height
-                charHeightPx = Math.max(1, glyphData[1]) * CHAR_HEIGHT; // Ensure min 1 line height
+            // Attempt to get metrics for non-space character using the lightweight lookup
+            glyphMetrics = _getGlyphLayoutMetricsOnly(_fontDataPoolOffset, fontDataOffset, charCode);
+            if (glyphMetrics) { // Character metrics found
+                charWidthPx = glyphMetrics.width * CHAR_WIDTH;
+                charHeightPx = Math.max(1, glyphMetrics.height) * CHAR_HEIGHT; // Ensure min 1 line height
                 isDefined = true;
             }
-            // Else: Undefined non-space char (width is 0, height is CHAR_HEIGHT)
+            // Else: Undefined non-space char (width is 0, height is CHAR_HEIGHT, isDefined is false)
         }
 
         return { widthPx: charWidthPx, heightPx: charHeightPx, isDefined: isDefined };
@@ -176,6 +200,7 @@
          if (!textLine) return { width: 0, height: CHAR_HEIGHT };
          let lineWidthPx = 0; let maxLineHeightPx = 0; let glyphCountOnLine = 0;
          for (let i = 0; i < textLine.length; i++) {
+             // Uses the optimized version that calls _getGlyphLayoutMetricsOnly
              const metrics = _getCharLayoutMetrics(fontDataOffset, textLine[i], minSpaceWidth);
              lineWidthPx += metrics.widthPx;
              maxLineHeightPx = Math.max(maxLineHeightPx, metrics.heightPx);
@@ -192,16 +217,20 @@
         for (let i = 0; i < lineText.length; i++) {
             const char = lineText[i];
             const charCode = char.charCodeAt(0);
+            // Get full data including stream for rendering
             const glyphCompactData = parseGlyphDataOnDemand(_fontDataPoolOffset, fontDataOffset, charCode);
             let glyphRenderWidthPx = 0;
 
             // Determine width to advance cursor
             if (char === ' ') {
-                 const spaceGlyph = parseGlyphDataOnDemand(_fontDataPoolOffset, fontDataOffset, 32);
-                 glyphRenderWidthPx = (spaceGlyph) ? spaceGlyph[0] * CHAR_WIDTH : minSpaceWidth * CHAR_WIDTH;
-            } else if (glyphCompactData) { glyphRenderWidthPx = glyphCompactData[0] * CHAR_WIDTH; }
+                 // Need width for space - use lightweight lookup if space glyph exists
+                 const spaceMetrics = _getGlyphLayoutMetricsOnly(_fontDataPoolOffset, fontDataOffset, 32);
+                 glyphRenderWidthPx = (spaceMetrics) ? spaceMetrics.width * CHAR_WIDTH : minSpaceWidth * CHAR_WIDTH;
+            } else if (glyphCompactData) { // Use width from the full data retrieved
+                glyphRenderWidthPx = glyphCompactData[0] * CHAR_WIDTH;
+            }
 
-            // Render the glyph's content if it exists
+            // Render the glyph's content if it exists (glyphCompactData includes stream)
             if (glyphCompactData && glyphCompactData.length > 2) { // Check stream data exists
                 let glyphX = 0, glyphY = 0;
                 for (let k = 2; k < glyphCompactData.length; k++) { // Start from index 2 for data
@@ -280,7 +309,8 @@
 
          const lines = text.split('\n'); let overallMaxWidth = 0; let totalHeight = 0;
          lines.forEach(line => {
-             const lineLayout = _calculateSingleLineLayout(fontDataOffset, fontSpacing, line, minSpaceWidth); // Uses optimized _getCharLayoutMetrics
+             // Uses optimized _calculateSingleLineLayout which calls _getCharLayoutMetrics (which now uses _getGlyphLayoutMetricsOnly)
+             const lineLayout = _calculateSingleLineLayout(fontDataOffset, fontSpacing, line, minSpaceWidth);
              overallMaxWidth = Math.max(overallMaxWidth, lineLayout.width);
              totalHeight += lineLayout.height;
          });
@@ -304,10 +334,10 @@
 
          const filteredKeys = [];
          for (const [key, fontDataOffset] of _fontIndex.entries()) {
-             // Check if all required characters have a defined glyph
+             // Check if all required characters have defined metrics (meaning the glyph exists)
              const supportsAllChars = requiredChars.every(char => {
-                 // parseGlyphDataOnDemand returns null if char not found
-                 return parseGlyphDataOnDemand(_fontDataPoolOffset, fontDataOffset, char.charCodeAt(0)) !== null;
+                 // Use the lighter metrics function to check existence without parsing stream
+                 return _getGlyphLayoutMetricsOnly(_fontDataPoolOffset, fontDataOffset, char.charCodeAt(0)) !== null;
              });
              if (supportsAllChars) {
                  filteredKeys.push(key);
@@ -346,7 +376,7 @@
         let targetCanvas = options.canvas;
 
         try {
-             // Calculate Overall Layout first
+             // Calculate Overall Layout first (uses the optimized path)
              const layout = tdfRenderer.calculateLayout(options.uniqueFontKey, options.text, minSpaceWidth);
              if (!layout) throw new Error("Failed to calculate layout.");
              const overallMaxWidthPx = layout.width;
@@ -377,7 +407,7 @@
             const lines = options.text.split('\n');
             let currentY = 0;
             lines.forEach(line => {
-                // Calculate metrics for *this* line
+                // Calculate metrics for *this* line (uses the optimized path)
                 const lineLayout = _calculateSingleLineLayout(fontDataOffset, fontSpacing, line, minSpaceWidth);
                 const lineWidthPx = lineLayout.width;
                 const lineHeightPx = lineLayout.height; // This is the max height of chars on the line
@@ -388,7 +418,7 @@
                 else if (textAlign === 'right') lineOffsetX = overallMaxWidthPx - lineWidthPx;
                 const lineStartX = blockStartX + lineOffsetX;
 
-                // Render the line content using the helper
+                // Render the line content using the helper (which calls parseGlyphDataOnDemand to get stream)
                 _renderLine(context, line, currentY, lineStartX, fontDataOffset, fontSpacing, minSpaceWidth);
 
                 currentY += lineHeightPx; // Move Y down by the calculated max height of this line
