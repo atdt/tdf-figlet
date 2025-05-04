@@ -1,4 +1,4 @@
-// tdfRenderer.js v1.8 (Final Cleanup)
+// tdfRenderer.js v1.9 (Optimized layout calculation)
 // TheDraw Font (.TDF) text rendering library for HTML Canvas
 // Uses preprocessed BINARY font bundle.
 // Copyright (C) 2012-2024 Ori Livneh & Contributors
@@ -127,39 +127,46 @@
             if (glyphDataRelativeOffset === -1) return null; // Glyph not defined
             const absoluteGlyphDataOffset = glyphDataTableOffset + glyphDataRelativeOffset;
             if (absoluteGlyphDataOffset + 2 > _bundleView.byteLength) return null; // Bounds check
-            const width = _bundleView.getUint8(absoluteGlyphDataOffset); const height = _bundleView.getUint8(absoluteGlyphDataOffset + 1);
+            const width = _bundleView.getUint8(absoluteGlyphDataOffset); // Precalculated Width
+            const height = _bundleView.getUint8(absoluteGlyphDataOffset + 1); // Precalculated Height (in lines)
             const streamStartOffset = absoluteGlyphDataOffset + 2;
             const streamData = _parseGlyphByteStream(streamStartOffset);
-            return [width, height, ...streamData]; // [w, h, c1, a1, -1, c2, a2, ...]
+            // Return format: [width, height_lines, ...streamData]
+            return [width, height, ...streamData];
         } catch (e) { console.error(`Glyph parse error char ${charCode} font offset ${fontDataOffsetInPool}:`, e); return null; }
     }
 
-    /** Calculates actual height (lines) from parsed compact glyph data array */
-    function getGlyphActualHeight(glyphCompactData) {
-        if (!glyphCompactData || glyphCompactData.length < 2) return 1;
-        let heightInLines = 0; let lineHasChars = false;
-        for (let i = 2; i < glyphCompactData.length; i++) { if (glyphCompactData[i] === NEWLINE_CODE) { heightInLines++; lineHasChars = false; } else { i++; lineHasChars = true; } }
-        if (lineHasChars) heightInLines++;
-        return heightInLines > 0 ? heightInLines : 1; // Min 1 line
-    }
-
-    /** Calculates layout metrics for a single character */
+    /** Calculates layout metrics for a single character using precalculated height */
     function _getCharLayoutMetrics(fontDataOffset, char, minSpaceWidth) {
-        let charWidthPx = 0; let charHeightPx = CHAR_HEIGHT; // Default height
+        let charWidthPx = 0;
+        let charHeightPx = CHAR_HEIGHT; // Default canvas cell height
         let isDefined = false;
         const charCode = char.charCodeAt(0);
-        const glyphCompactData = parseGlyphDataOnDemand(_fontDataPoolOffset, fontDataOffset, charCode);
+        let glyphData = null; // Holds [width, height_lines, ...stream]
 
         if (char === ' ') {
-            const spaceGlyphData = parseGlyphDataOnDemand(_fontDataPoolOffset, fontDataOffset, 32); // Explicitly check space
-            charWidthPx = (spaceGlyphData) ? spaceGlyphData[0] * CHAR_WIDTH : minSpaceWidth * CHAR_WIDTH;
-            charHeightPx = (spaceGlyphData) ? getGlyphActualHeight(spaceGlyphData) * CHAR_HEIGHT : CHAR_HEIGHT;
+            // Attempt to get data for space char (ASCII 32)
+            glyphData = parseGlyphDataOnDemand(_fontDataPoolOffset, fontDataOffset, 32);
+            if (glyphData) { // Space glyph is defined
+                charWidthPx = glyphData[0] * CHAR_WIDTH; // Use precalculated width
+                // Use precalculated height (lines) * CHAR_HEIGHT for pixel height
+                charHeightPx = Math.max(1, glyphData[1]) * CHAR_HEIGHT; // Ensure min 1 line height
+            } else { // Space glyph not defined, use minimum width
+                charWidthPx = minSpaceWidth * CHAR_WIDTH;
+                // Height remains default CHAR_HEIGHT
+            }
             isDefined = true; // Treat space as always defined for layout purposes
-        } else if (glyphCompactData) { // Defined non-space char
-            charWidthPx = glyphCompactData[0] * CHAR_WIDTH;
-            charHeightPx = getGlyphActualHeight(glyphCompactData) * CHAR_HEIGHT;
-            isDefined = true;
-        } // Else: Undefined non-space char (width 0, default height)
+        } else {
+            // Attempt to get data for non-space character
+            glyphData = parseGlyphDataOnDemand(_fontDataPoolOffset, fontDataOffset, charCode);
+            if (glyphData) { // Character is defined
+                charWidthPx = glyphData[0] * CHAR_WIDTH; // Use precalculated width
+                // Use precalculated height (lines) * CHAR_HEIGHT for pixel height
+                charHeightPx = Math.max(1, glyphData[1]) * CHAR_HEIGHT; // Ensure min 1 line height
+                isDefined = true;
+            }
+            // Else: Undefined non-space char (width is 0, height is CHAR_HEIGHT)
+        }
 
         return { widthPx: charWidthPx, heightPx: charHeightPx, isDefined: isDefined };
     }
@@ -195,7 +202,7 @@
             } else if (glyphCompactData) { glyphRenderWidthPx = glyphCompactData[0] * CHAR_WIDTH; }
 
             // Render the glyph's content if it exists
-            if (glyphCompactData) {
+            if (glyphCompactData && glyphCompactData.length > 2) { // Check stream data exists
                 let glyphX = 0, glyphY = 0;
                 for (let k = 2; k < glyphCompactData.length; k++) { // Start from index 2 for data
                     const item = glyphCompactData[k];
@@ -213,7 +220,9 @@
             }
             // Advance cursor X position
             currentX += glyphRenderWidthPx;
-            if (i < lineText.length - 1) { currentX += fontSpacing * CHAR_WIDTH; }
+            if (i < lineText.length - 1 && glyphRenderWidthPx > 0) { // Add spacing only if char had width
+                 currentX += fontSpacing * CHAR_WIDTH;
+            }
         }
     }
 
@@ -271,11 +280,15 @@
 
          const lines = text.split('\n'); let overallMaxWidth = 0; let totalHeight = 0;
          lines.forEach(line => {
-             const lineLayout = _calculateSingleLineLayout(fontDataOffset, fontSpacing, line, minSpaceWidth);
+             const lineLayout = _calculateSingleLineLayout(fontDataOffset, fontSpacing, line, minSpaceWidth); // Uses optimized _getCharLayoutMetrics
              overallMaxWidth = Math.max(overallMaxWidth, lineLayout.width);
              totalHeight += lineLayout.height;
          });
-         return { width: overallMaxWidth > 0 ? overallMaxWidth : CHAR_WIDTH, height: totalHeight > 0 ? totalHeight : CHAR_HEIGHT };
+         // Ensure final dimensions are at least one character cell
+         return {
+             width: overallMaxWidth > 0 ? overallMaxWidth : CHAR_WIDTH,
+             height: totalHeight > 0 ? totalHeight : CHAR_HEIGHT
+         };
     };
 
      /** Filters available fonts based on whether they support all non-space, supported characters in the input text. */
@@ -293,6 +306,7 @@
          for (const [key, fontDataOffset] of _fontIndex.entries()) {
              // Check if all required characters have a defined glyph
              const supportsAllChars = requiredChars.every(char => {
+                 // parseGlyphDataOnDemand returns null if char not found
                  return parseGlyphDataOnDemand(_fontDataPoolOffset, fontDataOffset, char.charCodeAt(0)) !== null;
              });
              if (supportsAllChars) {
@@ -366,7 +380,7 @@
                 // Calculate metrics for *this* line
                 const lineLayout = _calculateSingleLineLayout(fontDataOffset, fontSpacing, line, minSpaceWidth);
                 const lineWidthPx = lineLayout.width;
-                const lineHeightPx = lineLayout.height;
+                const lineHeightPx = lineLayout.height; // This is the max height of chars on the line
 
                 // Calculate starting X for *this line* based on alignment
                 let lineOffsetX = 0;
@@ -377,7 +391,7 @@
                 // Render the line content using the helper
                 _renderLine(context, line, currentY, lineStartX, fontDataOffset, fontSpacing, minSpaceWidth);
 
-                currentY += lineHeightPx; // Move Y down for next line
+                currentY += lineHeightPx; // Move Y down by the calculated max height of this line
             });
 
             return { canvas: targetCanvas }; // Resolve promise
