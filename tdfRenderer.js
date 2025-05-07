@@ -9,14 +9,14 @@
 
     // --- Constants ---
 
-    const CHAR_WIDTH = 8;  // Standard width of a CP437 character cell in pixels.
+    const CHAR_WIDTH = 8;   // Standard width of a CP437 character cell in pixels.
     const CHAR_HEIGHT = 16; // Standard height of a CP437 character cell in pixels.
 
-    const DEFAULT_MIN_SPACE_WIDTH = 3; // Default minimum width for a space character (in char units) if not defined in font.
+    const DEFAULT_MIN_SPACE_WIDTH = 3; // Default minimum width for a space char (in char units).
 
-    const BIN_NEWLINE_CODE = 0x0D;       // Byte code for newline in the TDF glyph stream.
-    const BIN_GLYPH_TERMINATOR = 0x00;   // Byte code that terminates a TDF glyph stream.
-    const NEWLINE_CODE = -1;             // Internal representation for a newline within a parsed glyph's compact data.
+    const BIN_NEWLINE_CODE = 0x0D;     // Byte code for newline in TDF glyph stream.
+    const BIN_GLYPH_TERMINATOR = 0x00; // Byte code terminating a TDF glyph stream.
+    const NEWLINE_CODE = -1;           // Internal representation for a newline.
 
     // Standard CGA/EGA/VGA 16-color palette (RGBA format).
     const TDF_COLORS = [
@@ -26,46 +26,42 @@
         [255,  85,  85, 255], [255,  85, 255, 255], [255, 255,  85, 255], [255, 255, 255, 255]
     ];
 
-    // List of characters supported by TDF glyph definitions (ASCII 33-126).
-    // Used by filterFontsByText to check for TDF-renderable characters.
-    const SUPPORTED_CHAR_LIST = "!\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
-
-
     // --- CP437 Font Data ---
 
     /**
-     * Attempts to load standard CP437 font data from a global variable `globalThis.cp437font`.
-     * This data is expected to be an array of 256 bitmaps, where each bitmap is an array of 16 numbers.
-     * @returns {Array<Array<number>>} The CP437 font data or a dummy array if not found.
+     * Retrieves pre-loaded CP437 font data.
+     * Expects `globalThis.cp437font` to be an array of 256 bitmaps.
+     * @returns {Array<Array<number>>} The CP437 font data or a dummy array.
      */
     function getCp437FontData() {
-        if (typeof globalThis !== 'undefined' && Array.isArray(globalThis.cp437font) && globalThis.cp437font.length >= 256) {
+        if (typeof globalThis !== 'undefined' &&
+            Array.isArray(globalThis.cp437font) &&
+            globalThis.cp437font.length >= 256) {
             return globalThis.cp437font;
-        } else {
-            console.error("tdfRenderer Error: globalThis.cp437font not found or invalid. CP437 rendering will fail.");
-            return Array(256).fill([]); // Return a dummy array to prevent downstream errors.
         }
+        console.error("tdfRenderer Error: globalThis.cp437font not found or invalid. CP437 rendering may fail.");
+        return Array(256).fill([]); // Dummy data to prevent downstream errors.
     }
-    const cp437FontData = getCp437FontData(); // Load CP437 font data immediately at script load.
+    const cp437FontData = getCp437FontData();
 
 
     // --- Internal State ---
 
-    let _bundleBuffer = null;      // ArrayBuffer holding the loaded TDF font bundle.
-    let _bundleView = null;        // DataView for accessing the _bundleBuffer.
-    let _fontIndex = new Map();    // Maps font unique keys (string) to their data offset (number) in the _fontDataPool.
-    let _stringPoolOffset = 0;     // Starting offset of the string pool in the bundle.
-    let _fontDataPoolOffset = 0;   // Starting offset of the font data pool in the bundle.
-    let _isInitialized = false;    // Flag indicating if the renderer has been initialized with a bundle.
+    let _bundleBuffer = null;       // ArrayBuffer of the TDF font bundle.
+    let _bundleView = null;         // DataView for accessing _bundleBuffer.
+    let _fontIndex = new Map();     // Maps font unique key (string) to its data offset (number).
+    let _stringPoolOffset = 0;      // Start offset of the string pool in the bundle.
+    let _fontDataPoolOffset = 0;    // Start offset of the font data pool in the bundle.
+    let _isInitialized = false;     // True if init() has successfully completed.
 
 
-    // --- Utilities ---
+    // --- Utilities: File I/O & String Parsing ---
 
     /**
-     * Fetches binary data from a given URL.
-     * @param {string} url - The URL to fetch the binary data from.
-     * @returns {Promise<ArrayBuffer>} A promise that resolves with the ArrayBuffer.
-     * @throws {Error} If the fetch request fails or the response is not ok.
+     * Fetches binary data from a URL.
+     * @param {string} url - The URL to fetch.
+     * @returns {Promise<ArrayBuffer>} A promise resolving with the ArrayBuffer.
+     * @throws {Error} If fetching fails.
      */
     async function fetchBinary(url) {
         try {
@@ -76,80 +72,15 @@
             return await response.arrayBuffer();
         } catch (error) {
             console.error(`tdfRenderer: Error fetching binary data from ${url}:`, error);
-            throw error; // Re-throw to allow caller to handle.
+            throw error; // Re-throw for caller handling.
         }
-    }
-
-    /**
-     * Draws a single CP437 character onto a canvas context.
-     * @param {CanvasRenderingContext2D} context - The 2D rendering context of the canvas.
-     * @param {number} charCode - The CP437 character code (0-255).
-     * @param {number} canvasX - The x-coordinate on the canvas to draw the character.
-     * @param {number} canvasY - The y-coordinate on the canvas to draw the character.
-     * @param {Array<number>} fgColorRgba - The foreground color as an RGBA array [r, g, b, a].
-     * @param {Array<number>} bgColorRgba - The background color as an RGBA array [r, g, b, a].
-     */
-    function drawCp437Char(context, charCode, canvasX, canvasY, fgColorRgba, bgColorRgba) {
-        if (typeof context.createImageData !== 'function') {
-            // Environment does not support createImageData (e.g., Node.js without a canvas library)
-            return;
-        }
-
-        let imageData;
-        try {
-            imageData = context.createImageData(CHAR_WIDTH, CHAR_HEIGHT);
-        } catch (e) {
-            // Older browsers or environments might fail here.
-            console.warn("tdfRenderer: context.createImageData failed.", e);
-            return;
-        }
-
-        const data = imageData.data;
-        const [fgR, fgG, fgB, fgA] = fgColorRgba;
-        const [bgR, bgG, bgB, bgA] = bgColorRgba;
-
-        const code = charCode & 0xFF; // Ensure it's within 0-255 range.
-        const bitmap = cp437FontData[code];
-
-        if (!bitmap || bitmap.length < CHAR_HEIGHT) {
-            // Undefined or invalid character bitmap: fill with background color.
-            if (bgColorRgba[3] > 0) { // Only fill if background is not fully transparent.
-                for (let i = 0; i < data.length; i += 4) {
-                    data[i]     = bgR;
-                    data[i + 1] = bgG;
-                    data[i + 2] = bgB;
-                    data[i + 3] = bgA;
-                }
-            } else {
-                // If background is transparent, ensure all pixels are transparent.
-                for (let i = 3; i < data.length; i += 4) {
-                    data[i] = 0; // Set alpha to 0.
-                }
-            }
-        } else {
-            // Valid character bitmap: render pixels.
-            for (let row = 0; row < CHAR_HEIGHT; row++) {
-                const rowBits = bitmap[row] || 0x00; // Default to empty row if bitmap is short.
-                for (let col = 0; col < CHAR_WIDTH; col++) {
-                    const offset = (row * CHAR_WIDTH + col) * 4;
-                    const isForeground = (rowBits >> (7 - col)) & 1;
-                    const colorToUse = isForeground ? fgColorRgba : bgColorRgba;
-
-                    data[offset]     = colorToUse[0];
-                    data[offset + 1] = colorToUse[1];
-                    data[offset + 2] = colorToUse[2];
-                    data[offset + 3] = colorToUse[3];
-                }
-            }
-        }
-        context.putImageData(imageData, Math.floor(canvasX), Math.floor(canvasY));
     }
 
     /**
      * Reads a null-terminated UTF-8 string from a DataView.
      * @param {DataView} dataView - The DataView to read from.
      * @param {number} startOffset - The offset where the string begins.
-     * @returns {string} The decoded string, or an empty string if unable to decode.
+     * @returns {string} The decoded string, or an empty string on failure.
      */
     function readNullTerminatedString(dataView, startOffset) {
         let endOffset = startOffset;
@@ -157,38 +88,106 @@
             endOffset++;
         }
 
-        if (endOffset === startOffset) {
-            return ""; // Empty string if null terminator is at the start or offset is at end.
-        }
+        if (endOffset === startOffset) return "";
 
         const stringBytes = new Uint8Array(dataView.buffer, dataView.byteOffset + startOffset, endOffset - startOffset);
 
         try {
-            return new TextDecoder().decode(stringBytes); // Modern approach.
+            return new TextDecoder().decode(stringBytes);
         } catch (e) {
-            // Fallback for environments without TextDecoder or for specific error cases.
+            // Fallback for older environments or specific TextDecoder issues.
+            // Note: String.fromCharCode can have issues with large strings or non-BMP chars,
+            // but likely acceptable for font keys.
             try {
-                // This fallback can be slow for very long strings and might not handle all UTF-8 correctly.
                 return String.fromCharCode.apply(null, stringBytes);
             } catch (decodeError) {
-                console.warn("tdfRenderer: Failed to decode string with TextDecoder and String.fromCharCode:", decodeError);
-                return ""; // Final fallback.
+                console.warn("tdfRenderer: String decoding failed with TextDecoder and fallback:", decodeError);
+                return "";
             }
         }
     }
 
-    /**
-     * Performs a binary search within a font's Glyph Lookup Table (GLT) to find a character's data offset.
-     * The GLT maps character codes to their relative offsets within the glyph data table.
-     * Each entry in GLT is 3 bytes: [Char Code (1 byte), Relative Data Offset (2 bytes, little-endian)].
-     * @param {number} lookupTableOffset - The starting offset of the GLT in the _bundleView.
-     * @param {number} glyphCount - The number of glyphs in this font, hence entries in the GLT.
-     * @param {number} charCode - The character code to search for.
-     * @returns {number} The relative offset of the glyph's data if found, otherwise -1.
-     */
-    function _findGlyphDataRelativeOffsetInTable(lookupTableOffset, glyphCount, charCode) {
-        if (!_bundleView) return -1;
 
+    // --- Utilities: CP437 Character Rendering ---
+
+    /**
+     * Fills an ImageData object with a specified color.
+     * @param {ImageData} imageData - The ImageData object to fill.
+     * @param {Array<number>} colorRgba - The RGBA color array [r, g, b, a].
+     */
+    function _fillImageData(imageData, colorRgba) {
+        const data = imageData.data;
+        const [r, g, b, a] = colorRgba;
+        for (let i = 0; i < data.length; i += 4) {
+            data[i]     = r;
+            data[i + 1] = g;
+            data[i + 2] = b;
+            data[i + 3] = a;
+        }
+    }
+
+    /**
+     * Draws a single CP437 character onto a canvas context.
+     * @param {CanvasRenderingContext2D} context - The 2D rendering context.
+     * @param {number} charCode - The CP437 character code (0-255).
+     * @param {number} canvasX - The x-coordinate on the canvas.
+     * @param {number} canvasY - The y-coordinate on the canvas.
+     * @param {Array<number>} fgColorRgba - Foreground RGBA color.
+     * @param {Array<number>} bgColorRgba - Background RGBA color.
+     */
+    function drawCp437Char(context, charCode, canvasX, canvasY, fgColorRgba, bgColorRgba) {
+        if (typeof context.createImageData !== 'function') return; // Environment doesn't support ImageData.
+
+        let imageData;
+        try {
+            imageData = context.createImageData(CHAR_WIDTH, CHAR_HEIGHT);
+        } catch (e) {
+            console.warn("tdfRenderer: context.createImageData failed.", e);
+            return;
+        }
+
+        const data = imageData.data;
+        const code = charCode & 0xFF; // Ensure 0-255 range.
+        const bitmap = cp437FontData[code];
+
+        if (!bitmap || bitmap.length < CHAR_HEIGHT) {
+            // Undefined or invalid character bitmap.
+            // Fill with background color. If background is fully transparent, use transparent black.
+            const fillColor = bgColorRgba[3] > 0 ? bgColorRgba : [0, 0, 0, 0];
+            _fillImageData(imageData, fillColor);
+        } else {
+            // Valid character bitmap: render pixels.
+            for (let row = 0; row < CHAR_HEIGHT; row++) {
+                const rowBits = bitmap[row] || 0x00; // Default to empty row.
+                for (let col = 0; col < CHAR_WIDTH; col++) {
+                    const offset = (row * CHAR_WIDTH + col) * 4;
+                    const isForeground = (rowBits >> (7 - col)) & 1;
+                    const [r, g, b, a] = isForeground ? fgColorRgba : bgColorRgba;
+
+                    data[offset]     = r;
+                    data[offset + 1] = g;
+                    data[offset + 2] = b;
+                    data[offset + 3] = a;
+                }
+            }
+        }
+        // Use Math.floor for canvas coordinates to ensure pixel-perfect alignment.
+        context.putImageData(imageData, Math.floor(canvasX), Math.floor(canvasY));
+    }
+
+
+    // --- Utilities: TDF Glyph Parsing & Metrics ---
+
+    /**
+     * Performs binary search in a font's Glyph Lookup Table (GLT) for a char's data offset.
+     * GLT entries: [Char Code (1 byte), Relative Data Offset (2 bytes, LE)].
+     * Assumes _bundleView is initialized.
+     * @param {number} lookupTableOffset - Start offset of the GLT in _bundleView.
+     * @param {number} glyphCount - Number of glyphs/entries in the GLT.
+     * @param {number} charCode - Character code to find.
+     * @returns {number} Relative offset of glyph data if found, else -1.
+     */
+    function _findGlyphOffsetInLookupTable(lookupTableOffset, glyphCount, charCode) {
         let low = 0;
         let high = glyphCount - 1;
 
@@ -196,13 +195,12 @@
             const mid = Math.floor((low + high) / 2);
             const entryOffset = lookupTableOffset + mid * 3; // Each entry is 3 bytes.
 
-            // Bounds check for safety, though logically covered by glyphCount if bundle is well-formed.
-            if (entryOffset + 3 > _bundleView.byteLength) return -1;
+            if (entryOffset + 3 > _bundleView.byteLength) return -1; // Safety: entry out of bounds.
 
             const entryCharCode = _bundleView.getUint8(entryOffset);
 
             if (entryCharCode === charCode) {
-                return _bundleView.getUint16(entryOffset + 1, true); // Found: return 2-byte offset (little-endian).
+                return _bundleView.getUint16(entryOffset + 1, true); // Found: return 2-byte offset (LE).
             }
 
             if (charCode < entryCharCode) {
@@ -215,34 +213,30 @@
     }
 
     /**
-     * Parses the raw byte stream for a single TDF glyph into a compact array representation.
-     * The compact data consists of [Char Code, Attribute Byte] pairs, or NEWLINE_CODE for newlines.
-     * @param {number} glyphStreamStartOffset - The offset where the glyph's byte stream begins.
-     * @returns {Array<number>} An array representing the glyph's drawing instructions.
+     * Parses a raw TDF glyph byte stream into a compact array.
+     * Compact data: [Char Code, Attribute Byte] pairs, or NEWLINE_CODE.
+     * Assumes _bundleView is initialized.
+     * @param {number} glyphStreamStartOffset - Offset where the glyph stream begins.
+     * @returns {Array<number>} Array of glyph drawing instructions.
      */
     function _parseGlyphByteStream(glyphStreamStartOffset) {
-        if (!_bundleView) return [];
-
         const compactData = [];
-        let currentReadOffset = glyphStreamStartOffset;
-        let byteValue = 0;
+        let currentOffset = glyphStreamStartOffset;
+        let byteValue;
 
-        while (currentReadOffset < _bundleView.byteLength) {
-            byteValue = _bundleView.getUint8(currentReadOffset++);
-            if (byteValue === BIN_GLYPH_TERMINATOR) {
-                break; // End of glyph stream.
-            }
+        while (currentOffset < _bundleView.byteLength) {
+            byteValue = _bundleView.getUint8(currentOffset++);
+            if (byteValue === BIN_GLYPH_TERMINATOR) break;
 
             if (byteValue === BIN_NEWLINE_CODE) {
                 compactData.push(NEWLINE_CODE);
             } else {
                 const charCodeByte = byteValue;
-                if (currentReadOffset >= _bundleView.byteLength) {
-                    // Premature end of stream after reading char code, before attribute.
-                    console.warn("tdfRenderer: Glyph stream ended prematurely.");
+                if (currentOffset >= _bundleView.byteLength) {
+                    console.warn("tdfRenderer: Glyph stream ended prematurely (missing attribute byte).");
                     break;
                 }
-                const attrByte = _bundleView.getUint8(currentReadOffset++);
+                const attrByte = _bundleView.getUint8(currentOffset++);
                 compactData.push(charCodeByte, attrByte);
             }
         }
@@ -250,155 +244,149 @@
     }
 
     /**
-     * Locates the start of a specific glyph's metadata (width, height, stream offset) within the font data.
-     * This is a common precursor to getting either layout metrics or full parse data.
-     * @param {number} fontDataPoolBaseOffset - Starting offset of the font data pool.
-     * @param {number} fontDataOffsetInPool - Offset of the specific font's data within the pool.
-     * @param {number} charCode - The character code of the glyph to locate.
-     * @returns {number | null} The absolute offset to the glyph's width/height/stream data, or null if not found/error.
+     * Reads basic font properties (glyph count, table offsets) from the font-specific data block.
+     * Assumes _bundleView is initialized.
+     * @param {number} fontPoolBase - Starting offset of the entire font data pool.
+     * @param {number} fontDataOffsetInPool - Offset of this specific font's data within the pool.
+     * @returns {{glyphCount: number, lookupTableStart: number, glyphDataTableBase: number} | null}
+     *          Font properties or null on error (e.g., insufficient data for header).
      */
-    function _locateGlyphEntry(fontDataPoolBaseOffset, fontDataOffsetInPool, charCode) {
-        if (!_bundleView) return null;
+    function _getFontInternalHeader(fontPoolBase, fontDataOffsetInPool) {
+        const fontBase = fontPoolBase + fontDataOffsetInPool;
+        // Font Data Structure: [Spacing (1B), Glyph Count (1B), GLT (...), Glyph Data Table (...)]
+        if (fontBase + 2 > _bundleView.byteLength) return null; // Need at least Spacing + Glyph Count.
 
-        const baseFontDataOffset = fontDataPoolBaseOffset + fontDataOffsetInPool;
+        const glyphCount = _bundleView.getUint8(fontBase + 1);
+        const lookupTableStart = fontBase + 2;
+        const glyphDataTableBase = lookupTableStart + glyphCount * 3; // Glyphs start after GLT.
 
-        // Font Data Header: [Spacing (1 byte), Glyph Count (1 byte), GLT (...), Glyph Data Table (...)]
-        // Ensure there's enough space for Spacing and Glyph Count.
-        if (baseFontDataOffset + 2 > _bundleView.byteLength) return null;
+        return { glyphCount, lookupTableStart, glyphDataTableBase };
+    }
 
-        const glyphCount = _bundleView.getUint8(baseFontDataOffset + 1);
-        if (glyphCount === 0) return null; // No glyphs defined for this font.
 
-        const lookupTableOffset = baseFontDataOffset + 2; // GLT starts after Spacing and Glyph Count.
-        const glyphDataTableBaseOffset = lookupTableOffset + glyphCount * 3; // Glyph Data Table starts after GLT.
+    /**
+     * Locates the absolute start offset of a glyph's metadata (width, height, stream offset).
+     * @param {number} fontPoolBase - Start offset of the font data pool.
+     * @param {number} fontDataOffsetInPool - Offset of this font's data in the pool.
+     * @param {number} charCode - Character code of the glyph.
+     * @returns {number | null} Absolute offset to glyph's width/height/stream, or null if not found.
+     */
+    function _locateGlyphEntryAbsoluteOffset(fontPoolBase, fontDataOffsetInPool, charCode) {
+        const fontHeader = _getFontInternalHeader(fontPoolBase, fontDataOffsetInPool);
+        if (!fontHeader) return null;
 
-        const glyphDataRelativeOffset = _findGlyphDataRelativeOffsetInTable(lookupTableOffset, glyphCount, charCode);
-        if (glyphDataRelativeOffset === -1) {
-            return null; // Glyph not defined in this font.
-        }
+        const { glyphCount, lookupTableStart, glyphDataTableBase } = fontHeader;
+        if (glyphCount === 0) return null; // No glyphs in this font.
 
-        const absoluteGlyphDataOffset = glyphDataTableBaseOffset + glyphDataRelativeOffset;
+        const relativeOffset = _findGlyphOffsetInLookupTable(lookupTableStart, glyphCount, charCode);
+        if (relativeOffset === -1) return null; // Glyph not defined.
 
-        // Check if the calculated offset is within bounds for reading at least width and height.
-        if (absoluteGlyphDataOffset + 2 > _bundleView.byteLength) {
-            // console.error(`tdfRenderer: Glyph data offset out of bounds for char ${charCode}.`);
-            return null;
-        }
+        const absoluteGlyphDataOffset = glyphDataTableBase + relativeOffset;
+
+        // Ensure at least width and height can be read.
+        if (absoluteGlyphDataOffset + 2 > _bundleView.byteLength) return null;
+
         return absoluteGlyphDataOffset;
     }
 
-
     /**
-     * Gets precalculated glyph width and height WITHOUT parsing the full data stream.
-     * Used primarily for layout calculations.
-     * @param {number} fontDataPoolBaseOffset - Starting offset of the font data pool.
-     * @param {number} fontDataOffsetInPool - Offset of the specific font's data within the pool.
-     * @param {number} charCode - The character code of the glyph.
-     * @returns {{width: number, height: number} | null} Object with width (in char cells) and height (in lines), or null if not found.
+     * Gets a glyph's precalculated width and height for layout purposes (no stream parsing).
+     * Assumes _bundleView is initialized and relevant offsets are valid.
+     * @param {number} fontPoolBase - Start offset of the font data pool.
+     * @param {number} fontDataOffsetInPool - Offset of this font's data in the pool.
+     * @param {number} charCode - Character code of the glyph.
+     * @returns {{width: number, height: number} | null} Width (char cells) & height (lines), or null.
      */
-    function _getGlyphLayoutMetricsOnly(fontDataPoolBaseOffset, fontDataOffsetInPool, charCode) {
-        const glyphDataStartOffset = _locateGlyphEntry(fontDataPoolBaseOffset, fontDataOffsetInPool, charCode);
-        if (glyphDataStartOffset === null) {
-            return null;
-        }
+    function _getGlyphLayoutMetricsOnly(fontPoolBase, fontDataOffsetInPool, charCode) {
+        const glyphDataStart = _locateGlyphEntryAbsoluteOffset(fontPoolBase, fontDataOffsetInPool, charCode);
+        if (glyphDataStart === null) return null;
 
-        try {
-            const width = _bundleView.getUint8(glyphDataStartOffset);       // Precalculated Width
-            const height = _bundleView.getUint8(glyphDataStartOffset + 1); // Precalculated Height (in lines)
-            return { width: width, height: height };
-        } catch (e) {
-            // This catch is for unexpected errors reading from _bundleView,
-            // as bounds are already checked by _locateGlyphEntry.
-            // console.error(`tdfRenderer: Layout metrics lookup error char ${charCode} at offset ${glyphDataStartOffset}:`, e);
-            return null;
-        }
+        // Bounds for width & height are implicitly checked by _locateGlyphEntryAbsoluteOffset
+        const width = _bundleView.getUint8(glyphDataStart);
+        const height = _bundleView.getUint8(glyphDataStart + 1);
+        return { width, height };
     }
 
     /**
-     * Parses a TDF glyph's width, height, and its character/attribute stream on demand.
-     * Used for actual rendering of the glyph.
-     * @param {number} fontDataPoolBaseOffset - Starting offset of the font data pool.
-     * @param {number} fontDataOffsetInPool - Offset of the specific font's data within the pool.
-     * @param {number} charCode - The character code of the glyph.
-     * @returns {Array<number> | null} An array: [width, height_lines, ...streamData], or null if not found/error.
+     * Parses a TDF glyph's full data (width, height, stream) for rendering.
+     * @param {number} fontPoolBase - Start offset of the font data pool.
+     * @param {number} fontDataOffsetInPool - Offset of this font's data in the pool.
+     * @param {number} charCode - Character code of the glyph.
+     * @returns {Array<number> | null} [width, height_lines, ...streamData], or null on error.
      */
-    function parseGlyphDataOnDemand(fontDataPoolBaseOffset, fontDataOffsetInPool, charCode) {
-        const glyphDataStartOffset = _locateGlyphEntry(fontDataPoolBaseOffset, fontDataOffsetInPool, charCode);
-        if (glyphDataStartOffset === null) {
-            return null;
-        }
+    function parseGlyphDataOnDemand(fontPoolBase, fontDataOffsetInPool, charCode) {
+        const glyphDataStart = _locateGlyphEntryAbsoluteOffset(fontPoolBase, fontDataOffsetInPool, charCode);
+        if (glyphDataStart === null) return null;
 
         try {
-            const width = _bundleView.getUint8(glyphDataStartOffset);
-            const height = _bundleView.getUint8(glyphDataStartOffset + 1);
-            const streamStartOffset = glyphDataStartOffset + 2; // Stream data follows width and height.
+            const width = _bundleView.getUint8(glyphDataStart);
+            const height = _bundleView.getUint8(glyphDataStart + 1);
+            const streamStart = glyphDataStart + 2; // Stream follows width & height.
 
-            const streamData = _parseGlyphByteStream(streamStartOffset);
+            const streamData = _parseGlyphByteStream(streamStart);
             return [width, height, ...streamData];
         } catch (e) {
-            console.error(`tdfRenderer: Glyph parse error for char ${charCode} at offset ${glyphDataStartOffset}:`, e);
+            // Catch errors during getUint8 or _parseGlyphByteStream if preconditions failed.
+            console.error(`tdfRenderer: Error parsing full glyph data for char ${charCode}:`, e);
             return null;
         }
     }
+
+
+    // --- Utilities: Text Layout Calculation ---
 
     /**
      * Calculates layout metrics (pixel width, pixel height) for a single character.
-     * Uses the lightweight `_getGlyphLayoutMetricsOnly` for efficiency.
-     * @param {number} fontDataOffsetInPool - Offset of the font's data within the font data pool.
+     * @param {number} fontDataOffsetInPool - Offset of the font's data.
      * @param {string} char - The character to measure.
-     * @param {number} minSpaceWidthChars - Minimum width for a space character, in character units.
+     * @param {number} minSpaceWidthChars - Min width for a space (char units).
      * @returns {{widthPx: number, heightPx: number, isDefined: boolean}} Layout metrics.
      */
     function _getCharLayoutMetrics(fontDataOffsetInPool, char, minSpaceWidthChars) {
-        let charWidthPx = 0;
-        let charHeightPx = CHAR_HEIGHT; // Default canvas cell height.
-        let isDefined = false;
         const charCode = char.charCodeAt(0);
+        let widthPx = 0;
+        let heightPx = CHAR_HEIGHT; // Default line height.
+        let isDefined = false;
 
-        let glyphMetrics = null; // Holds { width, height } from TDF font.
+        let glyphMetrics = null; // TDF-defined { width, height }
 
         if (char === ' ') {
-            // Space character (ASCII 32).
             glyphMetrics = _getGlyphLayoutMetricsOnly(_fontDataPoolOffset, fontDataOffsetInPool, 32);
             if (glyphMetrics) {
-                charWidthPx = glyphMetrics.width * CHAR_WIDTH;
-                charHeightPx = Math.max(1, glyphMetrics.height) * CHAR_HEIGHT; // Ensure min 1 line height.
+                widthPx = glyphMetrics.width * CHAR_WIDTH;
+                heightPx = Math.max(1, glyphMetrics.height) * CHAR_HEIGHT; // Min 1 line.
             } else {
-                // Space glyph not defined in TDF, use minimum specified width.
-                charWidthPx = minSpaceWidthChars * CHAR_WIDTH;
-                // Height remains default CHAR_HEIGHT for undefined space.
+                widthPx = minSpaceWidthChars * CHAR_WIDTH; // Use default for undefined space.
             }
-            isDefined = true; // Treat space as always defined for layout purposes.
+            isDefined = true; // Space is always "defined" for layout.
         } else {
-            // Non-space character.
             glyphMetrics = _getGlyphLayoutMetricsOnly(_fontDataPoolOffset, fontDataOffsetInPool, charCode);
             if (glyphMetrics) {
-                charWidthPx = glyphMetrics.width * CHAR_WIDTH;
-                charHeightPx = Math.max(1, glyphMetrics.height) * CHAR_HEIGHT;
+                widthPx = glyphMetrics.width * CHAR_WIDTH;
+                heightPx = Math.max(1, glyphMetrics.height) * CHAR_HEIGHT;
                 isDefined = true;
             }
-            // Else: Undefined non-space char results in widthPx = 0, heightPx = CHAR_HEIGHT, isDefined = false.
+            // Else: Undefined non-space char: widthPx = 0, heightPx = CHAR_HEIGHT, isDefined = false.
         }
-
-        return { widthPx: charWidthPx, heightPx: charHeightPx, isDefined: isDefined };
+        return { widthPx, heightPx, isDefined };
     }
 
     /**
      * Calculates total pixel width and maximum pixel height for a single line of text.
-     * @param {number} fontDataOffsetInPool - Offset of the font's data within the font data pool.
-     * @param {number} fontSpacingChars - Spacing between characters, in character units.
+     * @param {number} fontDataOffsetInPool - Offset of the font's data.
+     * @param {number} fontSpacingChars - Inter-character spacing (char units).
      * @param {string} textLine - The line of text to measure.
-     * @param {number} minSpaceWidthChars - Minimum width for space characters.
-     * @returns {{width: number, height: number}} The calculated width and height in pixels.
+     * @param {number} minSpaceWidthChars - Min width for space characters.
+     * @returns {{width: number, height: number}} Calculated width and height in pixels.
      */
     function _calculateSingleLineLayout(fontDataOffsetInPool, fontSpacingChars, textLine, minSpaceWidthChars) {
         if (!textLine) {
-            return { width: 0, height: CHAR_HEIGHT }; // Empty line has no width, default height.
+            return { width: 0, height: CHAR_HEIGHT }; // Empty line.
         }
 
         let lineWidthPx = 0;
         let maxLineHeightPx = 0;
-        let glyphCountOnLine = 0; // Number of glyphs that contribute to width (chars or defined spaces).
+        let glyphsOnLine = 0; // Count of glyphs contributing to width.
 
         for (let i = 0; i < textLine.length; i++) {
             const metrics = _getCharLayoutMetrics(fontDataOffsetInPool, textLine[i], minSpaceWidthChars);
@@ -406,40 +394,39 @@
             maxLineHeightPx = Math.max(maxLineHeightPx, metrics.heightPx);
 
             if (metrics.widthPx > 0 || textLine[i] === ' ') {
-                // Count characters or spaces that occupy horizontal space.
-                glyphCountOnLine++;
+                glyphsOnLine++;
             }
         }
 
-        if (glyphCountOnLine > 1) {
-            lineWidthPx += (glyphCountOnLine - 1) * (fontSpacingChars * CHAR_WIDTH);
+        if (glyphsOnLine > 1) {
+            lineWidthPx += (glyphsOnLine - 1) * (fontSpacingChars * CHAR_WIDTH);
         }
 
         // Ensure minimum dimensions for the line.
         return {
-            width: lineWidthPx > 0 ? lineWidthPx : CHAR_WIDTH,             // Min width of one char cell if content exists.
-            height: maxLineHeightPx > 0 ? maxLineHeightPx : CHAR_HEIGHT  // Min height of one char cell.
+            width: Math.max(lineWidthPx, textLine.length > 0 ? CHAR_WIDTH : 0), // Min width of one cell if content.
+            height: Math.max(maxLineHeightPx, CHAR_HEIGHT)  // Min height of one cell.
         };
     }
 
+
+    // --- Utilities: Text Rendering on Canvas ---
+
     /**
-     * Renders a single TDF glyph (which can be multi-character/multi-line) onto the canvas.
+     * Renders a single TDF glyph (which can span multiple cells/lines) onto the canvas.
      * @param {CanvasRenderingContext2D} context - The canvas rendering context.
-     * @param {Array<number>} glyphCompactData - The parsed glyph data: [width, height, ...stream].
-     * @param {number} baseX - The starting X position on the canvas for this TDF glyph.
-     * @param {number} baseY - The starting Y position on the canvas for this TDF glyph.
+     * @param {Array<number>} glyphCompactData - Parsed glyph: [width, height, ...stream].
+     * @param {number} baseX - Starting X on canvas for this TDF glyph.
+     * @param {number} baseY - Starting Y on canvas for this TDF glyph.
      */
     function _renderTdfGlyphOnCanvas(context, glyphCompactData, baseX, baseY) {
-        // glyphCompactData = [glyphWidthChars, glyphHeightLines, char1, attr1, char2, attr2, NEWLINE_CODE, char3, attr3, ...]
-        // We only need the stream part (from index 2 onwards) for rendering.
-        if (!glyphCompactData || glyphCompactData.length <= 2) {
-            return; // No stream data to render.
-        }
+        // compactData: [glyphWidthChars, glyphHeightLines, char1, attr1, ..., NEWLINE_CODE, ...]
+        if (!glyphCompactData || glyphCompactData.length <= 2) return; // No stream data.
 
-        let currentGlyphX = 0; // X offset within the TDF glyph, in character cells.
-        let currentGlyphY = 0; // Y offset within the TDF glyph, in lines.
+        let currentGlyphX = 0; // X offset within TDF glyph (char cells).
+        let currentGlyphY = 0; // Y offset within TDF glyph (lines).
 
-        for (let k = 2; k < glyphCompactData.length; k++) {
+        for (let k = 2; k < glyphCompactData.length; k++) { // Start after width/height.
             const item = glyphCompactData[k];
 
             if (item === NEWLINE_CODE) {
@@ -448,33 +435,33 @@
             } else {
                 const cp437CharCode = item;
                 k++; // Move to attribute byte.
-                if (k >= glyphCompactData.length) break; // Should not happen with well-formed data.
-                const attrByte = glyphCompactData[k];
+                if (k >= glyphCompactData.length) break; // Should not happen with valid data.
 
+                const attrByte = glyphCompactData[k];
                 const canvasX = baseX + currentGlyphX * CHAR_WIDTH;
                 const canvasY = baseY + currentGlyphY * CHAR_HEIGHT;
 
-                const bgIndex = (attrByte >> 4) & 0x07; // TDF uses 3 bits for bg index (0-7).
-                const fgIndex = attrByte & 0x0F;       // TDF uses 4 bits for fg index (0-15).
+                const bgIndex = (attrByte >> 4) & 0x07; // TDF: 3 bits for BG (0-7).
+                const fgIndex = attrByte & 0x0F;       // TDF: 4 bits for FG (0-15).
 
-                const bgColorRgba = TDF_COLORS[bgIndex] || TDF_COLORS[0]; // Default to black on invalid index.
-                const fgColorRgba = TDF_COLORS[fgIndex] || TDF_COLORS[7]; // Default to light grey on invalid index.
+                const bgColor = TDF_COLORS[bgIndex] || TDF_COLORS[0]; // Default: black.
+                const fgColor = TDF_COLORS[fgIndex] || TDF_COLORS[7]; // Default: light grey.
 
-                drawCp437Char(context, cp437CharCode, canvasX, canvasY, fgColorRgba, bgColorRgba);
+                drawCp437Char(context, cp437CharCode, canvasX, canvasY, fgColor, bgColor);
                 currentGlyphX++;
             }
         }
     }
 
     /**
-     * Renders a single line of text onto the canvas.
+     * Renders a single line of text onto the canvas at a specified X, Y.
      * @param {CanvasRenderingContext2D} context - The canvas rendering context.
      * @param {string} lineText - The text for the current line.
-     * @param {number} lineBaseY - The Y coordinate on the canvas for the top of this line.
-     * @param {number} lineStartX - The X coordinate on the canvas where this line's rendering should begin.
+     * @param {number} lineBaseY - Y coordinate on canvas for the top of this line.
+     * @param {number} lineStartX - X coordinate on canvas where this line begins.
      * @param {number} fontDataOffsetInPool - Offset of the font's data.
-     * @param {number} fontSpacingChars - Spacing between characters, in character units.
-     * @param {number} minSpaceWidthChars - Minimum width for space characters.
+     * @param {number} fontSpacingChars - Inter-character spacing (char units).
+     * @param {number} minSpaceWidthChars - Min width for space characters.
      */
     function _renderLine(context, lineText, lineBaseY, lineStartX, fontDataOffsetInPool, fontSpacingChars, minSpaceWidthChars) {
         let currentX = lineStartX;
@@ -482,34 +469,120 @@
         for (let i = 0; i < lineText.length; i++) {
             const char = lineText[i];
             const charCode = char.charCodeAt(0);
-
-            const glyphCompactData = parseGlyphDataOnDemand(_fontDataPoolOffset, fontDataOffsetInPool, charCode);
             let glyphRenderWidthPx = 0;
 
-            if (char === ' ') {
-                // For spaces, get width using lightweight metrics, similar to layout.
-                const spaceMetrics = _getGlyphLayoutMetricsOnly(_fontDataPoolOffset, fontDataOffsetInPool, 32);
-                glyphRenderWidthPx = (spaceMetrics)
-                    ? spaceMetrics.width * CHAR_WIDTH
-                    : minSpaceWidthChars * CHAR_WIDTH;
-            } else if (glyphCompactData) {
-                // For defined TDF glyphs, use width from the parsed data.
-                glyphRenderWidthPx = glyphCompactData[0] * CHAR_WIDTH; // glyphCompactData[0] is width in char cells.
-            }
-            // If glyphCompactData is null (for non-space, undefined char), width remains 0.
+            // Fetch glyph data for rendering (if not space) or metrics (for space).
+            const glyphCompactData = (char === ' ') ? null : parseGlyphDataOnDemand(_fontDataPoolOffset, fontDataOffsetInPool, charCode);
 
-            // Render the TDF glyph if it's defined and has content.
-            if (glyphCompactData && glyphCompactData.length > 2) {
+            if (char === ' ') {
+                const spaceMetrics = _getGlyphLayoutMetricsOnly(_fontDataPoolOffset, fontDataOffsetInPool, 32);
+                glyphRenderWidthPx = spaceMetrics ? spaceMetrics.width * CHAR_WIDTH : minSpaceWidthChars * CHAR_WIDTH;
+            } else if (glyphCompactData) {
+                glyphRenderWidthPx = glyphCompactData[0] * CHAR_WIDTH; // compactData[0] is width.
+            }
+            // If glyphCompactData is null for non-space, width remains 0 (undefined char).
+
+            if (glyphCompactData && glyphCompactData.length > 2) { // Has renderable stream.
                 _renderTdfGlyphOnCanvas(context, glyphCompactData, currentX, lineBaseY);
             }
 
-            // Advance cursor X position.
             currentX += glyphRenderWidthPx;
             if (i < lineText.length - 1 && glyphRenderWidthPx > 0) {
-                // Add inter-character spacing if the character had width and it's not the last char.
-                currentX += fontSpacingChars * CHAR_WIDTH;
+                currentX += fontSpacingChars * CHAR_WIDTH; // Add inter-char spacing.
             }
         }
+    }
+
+    /**
+     * Renders a line of text with specified alignment within a text block.
+     * @returns {number} The pixel height of the rendered line.
+     */
+    function _renderLineWithAlignment(context, lineText, lineBaseY, textBlockStartX, textBlockWidthPx, textAlign, fontDataOffsetInPool, fontSpacingChars, minSpaceWidthChars) {
+        const lineLayout = _calculateSingleLineLayout(fontDataOffsetInPool, fontSpacingChars, lineText, minSpaceWidthChars);
+        const currentLineWidthPx = lineLayout.width;
+        const currentLineHeightPx = lineLayout.height;
+
+        let lineIndentPx = 0; // Indentation of this line within the text block.
+        if (textAlign === 'center') {
+            lineIndentPx = Math.floor((textBlockWidthPx - currentLineWidthPx) / 2);
+        } else if (textAlign === 'right') {
+            lineIndentPx = textBlockWidthPx - currentLineWidthPx;
+        }
+
+        const lineRenderStartXOnCanvas = textBlockStartX + lineIndentPx;
+
+        _renderLine(context, lineText, lineBaseY, lineRenderStartXOnCanvas, fontDataOffsetInPool, fontSpacingChars, minSpaceWidthChars);
+        return currentLineHeightPx;
+    }
+
+
+    // --- Utilities: Bundle Parsing ---
+
+    const BUNDLE_HEADER_SIZE = 21; // Magic(4) + Ver(1) + Counts/Offsets(4*4)
+    const FONT_INDEX_ENTRY_SIZE = 8; // KeyOffset(4) + DataOffset(4)
+
+    /**
+     * Parses and validates the TDF Bundle header.
+     * @param {DataView} bundleView - DataView of the bundle.
+     * @returns {object} Header information or throws error.
+     */
+    function _parseBundleHeader(bundleView) {
+        if (bundleView.byteLength < BUNDLE_HEADER_SIZE) {
+            throw new Error("tdfRenderer: Bundle too small for header.");
+        }
+
+        const magicBytes = new Uint8Array(bundleView.buffer, bundleView.byteOffset, 4);
+        const magic = new TextDecoder().decode(magicBytes);
+        if (magic !== 'TDFB') {
+            throw new Error(`tdfRenderer: Invalid magic string. Expected "TDFB", got "${magic}".`);
+        }
+
+        const version = bundleView.getUint8(4);
+        if (version !== 1) {
+            throw new Error(`tdfRenderer: Unsupported bundle version: ${version}. Expected 1.`);
+        }
+
+        const fontCount = bundleView.getUint32(5, true);
+        const indexTableOffset = bundleView.getUint32(9, true);
+        const stringPoolOffset = bundleView.getUint32(13, true);
+        const fontDataPoolOffset = bundleView.getUint32(17, true);
+
+        // Validate offsets
+        const maxIndexTableEnd = indexTableOffset + fontCount * FONT_INDEX_ENTRY_SIZE;
+        if (indexTableOffset >= bundleView.byteLength ||
+            stringPoolOffset >= bundleView.byteLength ||
+            fontDataPoolOffset >= bundleView.byteLength ||
+            maxIndexTableEnd > bundleView.byteLength) {
+            throw new Error("tdfRenderer: Invalid offsets in bundle header (out of bounds).");
+        }
+
+        return { fontCount, indexTableOffset, stringPoolOffset, fontDataPoolOffset };
+    }
+
+    /**
+     * Parses the Font Index Table from the bundle.
+     * @param {DataView} bundleView - DataView of the bundle.
+     * @param {object} headerInfo - Parsed header information.
+     * @returns {Map<string, number>} Map of font keys to their data offsets.
+     */
+    function _parseFontIndex(bundleView, headerInfo) {
+        const { fontCount, indexTableOffset, stringPoolOffset } = headerInfo;
+        const newFontIndex = new Map();
+
+        for (let i = 0; i < fontCount; i++) {
+            const entryAbsOffset = indexTableOffset + i * FONT_INDEX_ENTRY_SIZE;
+
+            const keyStrRelOffset = bundleView.getUint32(entryAbsOffset, true);
+            const fontDataRelOffset = bundleView.getUint32(entryAbsOffset + 4, true);
+
+            const key = readNullTerminatedString(bundleView, stringPoolOffset + keyStrRelOffset);
+            if (key) {
+                newFontIndex.set(key, fontDataRelOffset); // Store offset relative to font data pool start.
+            } else {
+                console.warn(`tdfRenderer: Empty font key at index ${i} in bundle.`);
+            }
+        }
+        return newFontIndex;
     }
 
 
@@ -519,75 +592,24 @@
 
     /**
      * Initializes the renderer by fetching and parsing the TDF binary font bundle.
-     * Must be called before any rendering or layout calculation.
-     * @param {string} bundleUrl - URL of the preprocessed `tdf_bundle.bin` file.
-     * @returns {Promise<string[]>} A promise resolving with a sorted array of available unique font keys.
-     * @throws {Error} If initialization fails (e.g., bundle fetch error, invalid format).
+     * Must be called before rendering or layout calculations.
+     * @param {string} bundleUrl - URL of the `tdf_bundle.bin` file.
+     * @returns {Promise<string[]>} Promise resolving with sorted available font keys.
+     * @throws {Error} If initialization fails.
      */
     tdfRenderer.init = async function(bundleUrl) {
         if (_isInitialized) {
-            return tdfRenderer.getAvailableFonts(); // Already initialized, return existing keys.
+            return tdfRenderer.getAvailableFonts();
         }
 
-        _bundleBuffer = await fetchBinary(bundleUrl);
+        _bundleBuffer = await fetchBinary(bundleUrl); // Throws on fetch error
         _bundleView = new DataView(_bundleBuffer);
 
-        // --- Validate Bundle Header (21 bytes total) ---
-        // Magic (4 bytes: "TDFB")
-        // Version (1 byte)
-        // Font Count (4 bytes, little-endian)
-        // Index Table Offset (4 bytes, little-endian)
-        // String Pool Offset (4 bytes, little-endian)
-        // Font Data Pool Offset (4 bytes, little-endian)
-        const HEADER_SIZE = 21;
-        if (_bundleBuffer.byteLength < HEADER_SIZE) {
-            throw new Error("tdfRenderer: Binary bundle invalid - header too small.");
-        }
+        const headerInfo = _parseBundleHeader(_bundleView); // Throws on header error
+        _stringPoolOffset = headerInfo.stringPoolOffset;
+        _fontDataPoolOffset = headerInfo.fontDataPoolOffset;
 
-        // Read Magic String "TDFB" (4 bytes)
-        const magicBytes = new Uint8Array(_bundleView.buffer, _bundleView.byteOffset + 0, 4);
-        const magic = new TextDecoder().decode(magicBytes);
-        if (magic !== 'TDFB') {
-            throw new Error(`tdfRenderer: Invalid magic string in bundle header. Expected "TDFB", got "${magic}".`);
-        }
-
-        const version = _bundleView.getUint8(4); // Offset 4: Version
-        if (version !== 1) {
-            throw new Error(`tdfRenderer: Unsupported bundle version: ${version}. Expected version 1.`);
-        }
-
-        const fontCount = _bundleView.getUint32(5, true);          // Offset 5: Font Count (little-endian)
-        const indexTableOffset = _bundleView.getUint32(9, true);   // Offset 9: Index Table Offset (little-endian)
-        _stringPoolOffset = _bundleView.getUint32(13, true); // Offset 13: String Pool Offset (little-endian)
-        _fontDataPoolOffset = _bundleView.getUint32(17, true); // Offset 17: Font Data Pool Offset (little-endian)
-
-        // Validate offsets are within bundle bounds.
-        if (indexTableOffset >= _bundleBuffer.byteLength ||
-            _stringPoolOffset >= _bundleBuffer.byteLength ||
-            _fontDataPoolOffset >= _bundleBuffer.byteLength ||
-            indexTableOffset + fontCount * 8 > _bundleBuffer.byteLength // Check full index table size
-           ) {
-            throw new Error("tdfRenderer: Invalid offsets in bundle header - they point outside the bundle.");
-        }
-
-        // --- Parse Font Index Table ---
-        // Each entry: [Key String Offset (4 bytes, LE), Font Data Offset (4 bytes, LE)]
-        _fontIndex = new Map();
-        for (let i = 0; i < fontCount; i++) {
-            const entryOffset = indexTableOffset + i * 8; // Each entry is 8 bytes.
-
-            const keyStringRelativeOffset = _bundleView.getUint32(entryOffset, true);
-            const fontDataRelativeOffset = _bundleView.getUint32(entryOffset + 4, true);
-
-            const key = readNullTerminatedString(_bundleView, _stringPoolOffset + keyStringRelativeOffset);
-
-            if (key) {
-                // Store offset relative to _fontDataPoolOffset for consistency with how it's used later.
-                _fontIndex.set(key, fontDataRelativeOffset);
-            } else {
-                console.warn(`tdfRenderer: Empty font key found at index ${i} in bundle.`);
-            }
-        }
+        _fontIndex = _parseFontIndex(_bundleView, headerInfo);
 
         _isInitialized = true;
         return tdfRenderer.getAvailableFonts();
@@ -603,43 +625,39 @@
 
     /**
      * Returns a sorted array of unique font keys available in the loaded bundle.
-     * These keys are used to specify fonts for rendering and layout.
-     * @returns {string[]} A sorted array of font keys, or an empty array if not initialized.
+     * @returns {string[]} Sorted array of font keys, or empty if not initialized.
      */
     tdfRenderer.getAvailableFonts = function() {
-        if (!_isInitialized) {
-            return [];
-        }
-        // Map keys are iterated in insertion order. Sorting ensures a consistent, predictable order.
+        if (!_isInitialized) return [];
         return Array.from(_fontIndex.keys()).sort();
     };
 
     /**
-     * Calculates the overall layout dimensions (width and height in pixels) for a given text string
-     * using a specified TDF font. Handles multiline text.
-     * @param {string} uniqueFontKey - The key of the font to use for layout.
-     * @param {string} text - The text string (can include '\n' for newlines).
-     * @param {number} [minSpaceWidthChars=DEFAULT_MIN_SPACE_WIDTH] - Minimum width for space characters if not defined in font (in char units).
-     * @returns {{width: number, height: number} | null} An object with `width` and `height` in pixels, or null if error.
+     * Calculates overall layout dimensions (width, height in pixels) for text.
+     * Handles multiline text ('\n').
+     * @param {string} uniqueFontKey - The font key.
+     * @param {string} text - Text string (can include '\n').
+     * @param {number} [minSpaceWidthChars=DEFAULT_MIN_SPACE_WIDTH] - Min width for space char.
+     * @returns {{width: number, height: number} | null} Dimensions or null on error.
      */
     tdfRenderer.calculateLayout = function(uniqueFontKey, text, minSpaceWidthChars = DEFAULT_MIN_SPACE_WIDTH) {
-        if (!_isInitialized || !_bundleView) {
-            console.error("tdfRenderer.calculateLayout: Renderer not initialized.");
+        if (!_isInitialized) { // No _bundleView check needed here, _isInitialized covers it.
+            console.error("tdfRenderer.calculateLayout: Not initialized.");
             return null;
         }
         if (!text) {
-            // No text, but still return a minimal valid layout (e.g., for an empty canvas).
-            return { width: CHAR_WIDTH, height: CHAR_HEIGHT };
+            return { width: CHAR_WIDTH, height: CHAR_HEIGHT }; // Minimal layout for empty text.
         }
 
         const fontDataOffsetInPool = _fontIndex.get(uniqueFontKey);
         if (typeof fontDataOffsetInPool === "undefined") {
-            console.error(`tdfRenderer.calculateLayout: Font key not found: ${uniqueFontKey}`);
+            console.error(`tdfRenderer.calculateLayout: Font key "${uniqueFontKey}" not found.`);
             return null;
         }
 
         // Font Spacing is the first byte of the font-specific data.
-        const fontSpacingChars = _bundleView.getUint8(_fontDataPoolOffset + fontDataOffsetInPool);
+        const fontBase = _fontDataPoolOffset + fontDataOffsetInPool;
+        const fontSpacingChars = _bundleView.getUint8(fontBase);
 
         const lines = text.split('\n');
         let overallMaxWidthPx = 0;
@@ -651,180 +669,149 @@
             totalHeightPx += lineLayout.height;
         });
 
-        // Ensure final dimensions are at least one character cell if there was any content.
         return {
-            width: overallMaxWidthPx > 0 ? overallMaxWidthPx : CHAR_WIDTH,
-            height: totalHeightPx > 0 ? totalHeightPx : CHAR_HEIGHT
+            width: Math.max(overallMaxWidthPx, CHAR_WIDTH), // Ensure min 1 char width if content.
+            height: Math.max(totalHeightPx, CHAR_HEIGHT)    // Ensure min 1 char height.
         };
     };
 
     /**
-     * Filters the list of available TDF fonts, returning only those that support all
-     * non-space, TDF-renderable characters present in the input text.
-     * @param {string} text - The text to check character support against.
-     * @returns {string[]} A sorted array of font keys that support all required characters.
+     * Filters available TDF fonts to those supporting all TDF-renderable characters in the text.
+     * @param {string} text - Text to check character support against.
+     * @returns {string[]} Sorted array of compatible font keys.
      */
     tdfRenderer.filterFontsByText = function(text) {
-        if (!_isInitialized || !_bundleView) {
-            console.warn("tdfRenderer.filterFontsByText: Renderer not initialized.");
+        if (!_isInitialized) {
+            console.warn("tdfRenderer.filterFontsByText: Not initialized.");
             return [];
         }
         if (!text) {
-            return tdfRenderer.getAvailableFonts(); // No text requirements, return all available fonts.
+            return tdfRenderer.getAvailableFonts(); // All fonts compatible with empty text.
         }
 
-        // Identify unique, non-space, TDF-supported characters in the input text.
         const requiredChars = [...new Set(text.split(''))]
-            .filter(char => char !== ' ' && char !== '\n' && SUPPORTED_CHAR_LIST.includes(char));
+            .filter(char => {
+                if (char === ' ' || char === '\n') return false;
+                const charCode = char.charCodeAt(0);
+                // ASCII 33 ('!') to 126 ('~') are generally the TDF-renderable characters.
+                return charCode >= 33 && charCode <= 126;
+            });
 
         if (requiredChars.length === 0) {
-            // Text contains only spaces, newlines, or characters not in SUPPORTED_CHAR_LIST.
-            // All TDF fonts are considered "compatible" in this case.
+            // Text has only spaces, newlines, or unsupported chars (outside 33-126).
             return tdfRenderer.getAvailableFonts();
         }
 
-        const filteredKeys = [];
-        for (const [key, fontDataOffsetInPool] of _fontIndex.entries()) {
-            const supportsAllChars = requiredChars.every(char => {
-                // Use the lightweight metrics function to efficiently check for glyph existence.
-                return _getGlyphLayoutMetricsOnly(_fontDataPoolOffset, fontDataOffsetInPool, char.charCodeAt(0)) !== null;
-            });
-
-            if (supportsAllChars) {
-                filteredKeys.push(key);
-            }
-        }
-        return filteredKeys.sort(); // Return sorted for consistency.
+        return Array.from(_fontIndex.entries())
+            .filter(([/*key*/, fontDataOffsetInPool]) =>
+                requiredChars.every(char =>
+                    _getGlyphLayoutMetricsOnly(_fontDataPoolOffset, fontDataOffsetInPool, char.charCodeAt(0)) !== null
+                )
+            )
+            .map(([key]) => key)
+            .sort();
     };
 
     /**
-     * Prepares the canvas for rendering: creates or resizes, gets context, and clears.
+     * Prepares canvas: creates/resizes, gets context, clears with background.
      * @private
      */
-    function _prepareCanvasAndContext(options, layout, bgColor) {
+    function _prepareCanvasAndContext(options, layout, bgColorRgba) {
         let targetCanvas = options.canvas;
-        const canCreateCanvas = typeof document !== 'undefined' && typeof document.createElement === 'function';
+        const canCreate = typeof document !== 'undefined' && typeof document.createElement === 'function';
 
         if (!targetCanvas) {
-            if (!canCreateCanvas) {
-                throw new Error("tdfRenderer: options.canvas is required in non-browser environments.");
-            }
+            if (!canCreate) throw new Error("tdfRenderer: options.canvas required in non-browser env.");
             targetCanvas = document.createElement('canvas');
         }
 
-        // Determine final canvas dimensions.
-        const canvasWidth = Math.max(options.targetWidth || 0, layout.width, CHAR_WIDTH);
-        const canvasHeight = Math.max(layout.height, CHAR_HEIGHT);
-
-        targetCanvas.width = canvasWidth;
-        targetCanvas.height = canvasHeight;
+        targetCanvas.width = Math.max(options.targetWidth || 0, layout.width, CHAR_WIDTH);
+        targetCanvas.height = Math.max(layout.height, CHAR_HEIGHT);
 
         const context = targetCanvas.getContext('2d');
-        if (!context) {
-            throw new Error("tdfRenderer: Failed to get 2D rendering context from canvas.");
-        }
+        if (!context) throw new Error("tdfRenderer: Failed to get 2D context from canvas.");
 
-        // Clear canvas with the specified background color.
-        context.fillStyle = `rgba(${bgColor.join(',')})`;
+        context.fillStyle = `rgba(${bgColorRgba.join(',')})`;
         context.fillRect(0, 0, targetCanvas.width, targetCanvas.height);
 
         return { canvas: targetCanvas, context: context };
     }
 
     /**
-     * Renders text using a loaded TDF font onto a canvas.
-     * Auto-creates a canvas if one is not provided (in browser environments).
+     * Renders text using a TDF font onto a canvas.
+     * Auto-creates canvas in browser if not provided.
      *
-     * @param {object} options - Configuration options for rendering.
-     * @param {string} options.uniqueFontKey - The unique key identifying the font in the bundle.
-     * @param {string} options.text - The text string to render (can include '\n' for newlines).
-     * @param {HTMLCanvasElement} [options.canvas] - Optional: Target canvas element. If omitted, a new one is created.
-     * @param {number} [options.targetWidth] - Optional: Minimum width for the canvas. If a canvas is provided,
-     *                                          it will be resized to at least this width and the calculated text width.
-     *                                          If a canvas is created, it will be at least this width.
-     * @param {string} [options.textAlign='left'] - Optional: Text alignment ('left', 'center', 'right')
-     *                                              relative to the calculated maximum text block width.
-     * @param {Array<number>} [options.bgColor] - Optional: Background RGBA color [r,g,b,a]. Defaults to opaque black [0,0,0,255].
-     * @param {number} [options.minSpaceWidth] - Optional: Minimum width (in character cells) for space characters
-     *                                           if the space glyph is not defined in the font. Defaults to DEFAULT_MIN_SPACE_WIDTH.
-     * @returns {Promise<{canvas: HTMLCanvasElement}>} A promise resolving with an object containing the canvas element used/created.
-     * @throws {Error} If rendering fails (e.g., not initialized, font not found, canvas issues).
+     * @param {object} options - Rendering configuration.
+     * @param {string} options.uniqueFontKey - Font key.
+     * @param {string} options.text - Text to render (can include '\n').
+     * @param {HTMLCanvasElement} [options.canvas] - Optional target canvas.
+     * @param {number} [options.targetWidth] - Optional minimum canvas width.
+     * @param {string} [options.textAlign='left'] - Alignment ('left', 'center', 'right').
+     * @param {Array<number>} [options.bgColor] - BG RGBA color [r,g,b,a]; default: opaque black.
+     * @param {number} [options.minSpaceWidth] - Min width for space char (char units).
+     * @returns {Promise<{canvas: HTMLCanvasElement}>} Promise with the canvas.
+     * @throws {Error} If rendering fails.
      */
     tdfRenderer.render = async function(options) {
-        if (!_isInitialized || !_bundleView) {
-            throw new Error("tdfRenderer.render: Renderer not initialized. Call init() first.");
+        if (!_isInitialized) {
+            throw new Error("tdfRenderer.render: Not initialized. Call init() first.");
         }
         if (!options || !options.uniqueFontKey || typeof options.text === 'undefined') {
-            throw new Error("tdfRenderer.render: Missing required options. 'uniqueFontKey' and 'text' must be provided.");
+            throw new Error("tdfRenderer.render: Missing 'uniqueFontKey' or 'text' in options.");
         }
 
-        const fontDataOffsetInPool = _fontIndex.get(options.uniqueFontKey);
+        const { uniqueFontKey, text } = options;
+        const fontDataOffsetInPool = _fontIndex.get(uniqueFontKey);
         if (typeof fontDataOffsetInPool === "undefined") {
-            throw new Error(`tdfRenderer.render: Font key not found: ${options.uniqueFontKey}`);
+            throw new Error(`tdfRenderer.render: Font key "${uniqueFontKey}" not found.`);
         }
 
-        const fontSpacingChars = _bundleView.getUint8(_fontDataPoolOffset + fontDataOffsetInPool);
+        const fontBase = _fontDataPoolOffset + fontDataOffsetInPool;
+        const fontSpacingChars = _bundleView.getUint8(fontBase);
+
         const minSpaceWidthChars = (typeof options.minSpaceWidth === 'number' && options.minSpaceWidth >= 0)
-            ? options.minSpaceWidth
-            : DEFAULT_MIN_SPACE_WIDTH;
+            ? options.minSpaceWidth : DEFAULT_MIN_SPACE_WIDTH;
         const textAlign = ['left', 'center', 'right'].includes(options.textAlign) ? options.textAlign : 'left';
-        const bgColor = (Array.isArray(options.bgColor) && options.bgColor.length === 4)
-            ? options.bgColor
-            : [0, 0, 0, 255]; // Default to opaque black.
+        const bgColorRgba = (Array.isArray(options.bgColor) && options.bgColor.length === 4)
+            ? options.bgColor : [0, 0, 0, 255]; // Default: opaque black.
 
         try {
-            // 1. Calculate Overall Layout
-            const layout = tdfRenderer.calculateLayout(options.uniqueFontKey, options.text, minSpaceWidthChars);
-            if (!layout) {
-                // Should not happen if calculateLayout is robust, but as a safeguard.
-                throw new Error("tdfRenderer.render: Failed to calculate text layout.");
-            }
-            const overallTextMaxWidthPx = layout.width; // Max width of any line in the text block.
+            const layout = tdfRenderer.calculateLayout(uniqueFontKey, text, minSpaceWidthChars);
+            if (!layout) throw new Error("tdfRenderer.render: Failed to calculate text layout."); // Should be caught by calculateLayout returning null
 
-            // 2. Prepare Canvas and Context
-            const { canvas: targetCanvas, context } = _prepareCanvasAndContext(options, layout, bgColor);
+            const overallTextMaxWidthPx = layout.width;
+            const { canvas: targetCanvas, context } = _prepareCanvasAndContext(options, layout, bgColorRgba);
 
-            // 3. Calculate Block Start X for centering the entire text block on the canvas
-            //    This ensures that if the canvas is wider than the text, the text block itself can be centered.
+            // Center the entire text block on the canvas if canvas is wider.
             const blockStartX = Math.floor((targetCanvas.width - overallTextMaxWidthPx) / 2);
 
-            // 4. Render Line by Line
-            const lines = options.text.split('\n');
+            const lines = text.split('\n');
             let currentY = 0;
 
             for (const line of lines) {
-                // Calculate metrics for *this specific line* to handle alignment.
-                const lineLayout = _calculateSingleLineLayout(fontDataOffsetInPool, fontSpacingChars, line, minSpaceWidthChars);
-                const currentLineWidthPx = lineLayout.width;
-                const currentLineHeightPx = lineLayout.height; // Max height of characters on this line.
-
-                // Calculate starting X for *this line* based on text alignment within the text block.
-                let lineOffsetX = 0; // Relative to the start of the text block.
-                if (textAlign === 'center') {
-                    lineOffsetX = Math.floor((overallTextMaxWidthPx - currentLineWidthPx) / 2);
-                } else if (textAlign === 'right') {
-                    lineOffsetX = overallTextMaxWidthPx - currentLineWidthPx;
-                }
-                // For 'left' alignment, lineOffsetX remains 0.
-
-                const lineRenderStartX = blockStartX + lineOffsetX;
-
-                // Render the actual line content.
-                _renderLine(context, line, currentY, lineRenderStartX, fontDataOffsetInPool, fontSpacingChars, minSpaceWidthChars);
-
-                currentY += currentLineHeightPx; // Move Y down by the height of the line just rendered.
+                const lineHeightPx = _renderLineWithAlignment(
+                    context,
+                    line,
+                    currentY,
+                    blockStartX,
+                    overallTextMaxWidthPx,
+                    textAlign,
+                    fontDataOffsetInPool,
+                    fontSpacingChars,
+                    minSpaceWidthChars
+                );
+                currentY += lineHeightPx;
             }
 
             return { canvas: targetCanvas };
 
         } catch (error) {
-            console.error(`tdfRenderer: Error during rendering for font "${options.uniqueFontKey}":`, error);
-            throw error; // Re-throw to reject the promise and allow caller handling.
+            console.error(`tdfRenderer: Error during rendering for font "${uniqueFontKey}":`, error);
+            throw error; // Re-throw for caller handling.
         }
     };
 
     // --- Expose Public API ---
-    // Attaches the tdfRenderer object to the global context (window in browsers, or global/this elsewhere).
     global.tdfRenderer = tdfRenderer;
 
 })(typeof globalThis !== 'undefined' ? globalThis : this);
