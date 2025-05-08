@@ -15,7 +15,7 @@ The TDF-specific parsing (`tdfPacker.js`, `tdfRenderer.js`), the binary data bun
 ## Features
 
 * Renders text using glyphs from preprocessed TDF Color fonts (Type 2).
-* Uses a compact **Binary bundle (`tdf_bundle.bin`)** for efficient font data loading.
+* Uses a compact **Binary bundle (`tdf-fonts.bin`)** for efficient font data loading.
 * Simple web interface (`index.html`) for text input and font selection.
 * Handles multi-line text input (`\n`).
 * Configurable text alignment (left, center, right).
@@ -28,12 +28,12 @@ The TDF-specific parsing (`tdfPacker.js`, `tdfRenderer.js`), the binary data bun
 To run the `index.html` web application, you need to preprocess your `.TDF` font collection into the binary bundle format:
 
 1.  **Gather Fonts:** Place your `.TDF` files into a directory (e.g., `tdf_fonts/`).
-2.  **Preprocess:** This project includes `tdfPacker.js`. You'll need Node.js installed. Run the script to generate the necessary `tdf_bundle.bin`:
+2.  **Preprocess:** This project includes `tdfPacker.js`. You'll need Node.js installed. Run the script to generate the necessary `tdf-fonts.bin`:
     ```bash
     # Run the preprocessor script
-    node tdfPacker.js path/to/your/tdf_fonts path/to/output/tdf_bundle.bin
+    node tdfPacker.js path/to/your/tdf_fonts path/to/output/tdf-fonts.bin
     ```
-    *(Make sure `tdf_bundle.bin` is saved where `index.html` can fetch it).*
+    *(Make sure `tdf-fonts.bin` is saved where `index.html` can fetch it).*
 3.  **CP437 Font Data:** The renderer requires CP437 bitmap data. Create a `cp437font.js` file that assigns the font data array to `globalThis.cp437font`. This file must be loaded *before* `tdfRenderer.js`.
     ```javascript
     // Example cp437font.js
@@ -50,14 +50,14 @@ To run the `index.html` web application, you need to preprocess your `.TDF` font
 
 After completing the setup:
 
-1.  Make sure `tdf_bundle.bin` and `cp437font.js` are accessible by the HTML file.
+1.  Make sure `tdf-fonts.bin` and `cp437font.js` are accessible by the HTML file.
 2.  Open `index.html` in your web browser.
 3.  Type text into the input area.
 4.  Select a font from the dropdown.
 5.  Use the checkboxes and number input to control filtering, random order (for "Show All"), minimum space width, and text alignment.
 6.  Click "Show All Fonts" to view the text rendered in all applicable fonts (scroll down to render them as they enter the viewport).
 
-## Binary Bundle Format (`tdf_bundle.bin`)
+## Binary Bundle Format (`tdf-fonts.bin`)
 
 The `tdfPacker.js` script generates a binary file containing all necessary data extracted from the TDF Color fonts. The format is structured as follows (all multi-byte values are Little Endian):
 

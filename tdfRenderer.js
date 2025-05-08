@@ -653,7 +653,7 @@
   /**
    * Initializes the renderer by fetching and parsing the TDF binary font bundle.
    * Must be called before rendering or layout calculations.
-   * @param {string} bundleUrl - URL of the `tdf_bundle.bin` file.
+   * @param {string} bundleUrl - URL of the `tdf-fonts.bin` file.
    * @returns {Promise<string[]>} Promise resolving with sorted available font keys.
    * @throws {Error} If initialization fails.
    */

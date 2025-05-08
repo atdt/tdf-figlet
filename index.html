@@ -146,7 +146,7 @@
                  if (typeof tdfRenderer === 'undefined' || typeof tdfRenderer.init !== 'function') { setStatus('Error: tdfRenderer library not found or invalid.', true); return; }
             }
             try {
-                const bundleUrl = 'tdf_bundle.bin'; // Path to your font bundle
+                const bundleUrl = 'tdf-fonts.bin'; // Path to your font bundle
                 masterFontList = await tdfRenderer.init(bundleUrl);
                 if (masterFontList.length === 0) { setStatus('No fonts found in bundle.', true); return; }
                 updateFontDropdown(); setControlsEnabled(true);
