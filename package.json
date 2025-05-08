@@ -1,0 +1,22 @@
+{
+  "devDependencies": {
+    "@biomejs/biome": "1.9.4"
+  },
+  "name": "tdf-figlet",
+  "version": "1.0.0",
+  "description": "TheDraw Font Renderer",
+  "main": "preprocess_tdf.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/atdt/tdf-figlet.git"
+  },
+  "author": "Ori Livneh",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/atdt/tdf-figlet/issues"
+  },
+  "homepage": "https://github.com/atdt/tdf-figlet#readme"
+}

@@ -1,218 +1,574 @@
 #!/usr/bin/env node
 
-// Preprocesses TDF files into a single, compact BINARY bundle (.bin).
-// Handles multi-font TDFs, creates unique font keys, stores data compactly.
+// preprocess_tdf.js v1.1 (Enhanced Readability & Maintainability)
+// Preprocesses TheDraw Font (.TDF) files from a directory into a single,
+// compact binary bundle (.bin) for use with tdfRenderer.js.
+// Handles multi-font TDFs, creates unique font keys, and stores data compactly.
 
-import fs from 'node:fs';
-import path from 'node:path';
-import { Buffer } from 'node:buffer'; // Explicit import might be needed
+import fs from "node:fs";
+import path from "node:path";
+import { Buffer } from "node:buffer"; // Explicit import for clarity
 
-// --- Constants ---
+// --- TDF Format Constants (Input .TDF file structure) ---
+
+/** Expected type identifier for TDF color fonts. */
 const TDF_COLOR_FONT_TYPE = 2;
-const TDF_HEADER_SIGNATURE = Buffer.from([0x55, 0xAA, 0x00, 0xFF]);
-const TDF_HEADER_START_OFFSET = 20;
-// const TDF_DATA_START_OFFSET = 233; // No longer global
-const SUPPORTED_CHAR_LIST = "!\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
-const BIN_NEWLINE_CODE = 0x0D; // Use CR byte for newline marker in binary stream
-const BIN_GLYPH_TERMINATOR = 0x00; // Null byte to terminate glyph stream
-const HEADER_METADATA_SIZE = 213; // Estimated size from header sig to end of offset table
+/** Signature bytes indicating the start of a TDF font header block. */
+const TDF_HEADER_SIGNATURE = Buffer.from([0x55, 0xaa, 0x00, 0xff]); // Uª.ÿ
+/**
+ * Estimated size in bytes from the TDF_HEADER_SIGNATURE to the end of
+ * the character offset table within a TDF font header.
+ * This includes: Signature (4), Name Length (1), Name (12), Reserved (3), Type (1),
+ * Space (1), Size (2), Offset Table (94 * 2 = 188).
+ * 4 + 1 + 12 + 3 + 1 + 1 + 2 + 188 = 212. Original was 213, likely accounting for an extra byte.
+ * The actual data block for glyphs starts *after* this structure.
+ */
+const TDF_FONT_METADATA_BLOCK_SIZE = 213; // Offset from signature to find start of character data block.
 
-// Output Binary Format Constants
-const BIN_MAGIC = 'TDFB';
-const BIN_VERSION = 1;
+// --- Binary Bundle Constants (Output .bin file structure) ---
 
-// --- TDF Parser Logic ---
-// (TdfParserNode class remains mostly the same as v1.5, crucially including
-// the fix for calculating dataBlockStartOffset per font)
+/** Magic string "TDFB" (TDF Bundle) to identify the binary bundle format. */
+const BIN_MAGIC_STRING = "TDFB";
+/** Version number of the binary bundle format. */
+const BIN_BUNDLE_VERSION = 1;
+/** Byte code for a newline character within a glyph's binary stream. (Carriage Return) */
+const BIN_STREAM_NEWLINE_CODE = 0x0d;
+/** Byte code that terminates a glyph's character stream in the binary format. (Null terminator) */
+const BIN_STREAM_GLYPH_TERMINATOR = 0x00;
+
+// --- General Constants ---
+
+/**
+ * List of 94 printable ASCII characters (ASCII 33-126)
+ * for which TDF fonts typically store glyph offset information.
+ */
+const SUPPORTED_CHAR_LIST =
+  "!\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
+
+/**
+ * Parses TheDraw Font (.TDF) files.
+ * Handles TDF files that may contain multiple font definitions.
+ */
 class TdfParserNode {
-     constructor(buffer, filePath = 'unknown') { if (!buffer || !(buffer instanceof Buffer) || buffer.byteLength < 233) throw new Error(`Invalid TDF buffer: ${filePath}`); this.buffer = buffer; this.filePath = filePath; this.fonts = []; }
-     parse() { /* Parses headers, calculates uniqueKey and correct dataBlockStartOffset for each font. Implementation omitted for brevity - use the corrected version from previous step */
-        this.fonts = []; const dataView = new DataView(this.buffer.buffer, this.buffer.byteOffset, this.buffer.byteLength);
-        const magicString = "TheDraw FONTS file"; if (dataView.byteLength < 20 || dataView.getUint8(0) !== 0x13 || dataView.getUint8(19) !== 0x1A) { console.warn(`[${this.filePath}] TDF header validation failed.`); }
-        let currentOffset = 0;
-        while (currentOffset <= dataView.byteLength - TDF_HEADER_SIGNATURE.length) {
-             let headerStartIndex = -1; for (let searchOffset = currentOffset; searchOffset <= dataView.byteLength - TDF_HEADER_SIGNATURE.length; searchOffset++) { if (this.buffer.compare(TDF_HEADER_SIGNATURE, 0, 4, searchOffset, searchOffset + 4) === 0) { headerStartIndex = searchOffset; break; } } if (headerStartIndex === -1) break;
-             try { const nameLenOffset = 4, nameOffset = 5, typeOffset = 21, spaceOffset = 22, sizeOffset = 23, tableOffset = 25; if (headerStartIndex + HEADER_METADATA_SIZE > dataView.byteLength) { currentOffset = headerStartIndex + 1; continue; }
-                 const fontNameLength = Math.min(dataView.getUint8(headerStartIndex + nameLenOffset), 12); let fontName = ""; for (let i = 0; i < fontNameLength; i++) { const cc = dataView.getUint8(headerStartIndex + nameOffset + i); if (cc === 0) break; fontName += String.fromCharCode(cc); } fontName = fontName.trim();
-                 const fontType = dataView.getUint8(headerStartIndex + typeOffset);
-                 if (fontType === TDF_COLOR_FONT_TYPE) {
-                     const letterSpacingRaw = dataView.getUint8(headerStartIndex + spaceOffset); const letterSpacing = letterSpacingRaw > 0 ? letterSpacingRaw - 1 : 0;
-                     const blockSize = dataView.getUint16(headerStartIndex + sizeOffset, true); const offsets = {};
-                     for (let i = 0; i < 94; i++) { const co = dataView.getUint16(headerStartIndex + tableOffset + i * 2, true); if (co !== 0xFFFF) offsets[SUPPORTED_CHAR_LIST[i]] = co; }
-                     const dataBlockStartOffset = headerStartIndex + HEADER_METADATA_SIZE; // Calculated start
-                     const baseFilename = path.basename(this.filePath, '.tdf'); const sanitizedBase = baseFilename.replace(/[^a-zA-Z0-9]/g, '_'); const sanitizedName = fontName.replace(/[^a-zA-Z0-9]/g, '_'); const uniqueKey = `${sanitizedBase}_${sanitizedName}`;
-                     const fontData = { uniqueKey, internalName: fontName, type: fontType, spacing: letterSpacing, blockSize, offsets, dataBlockStartOffset }; this.fonts.push(fontData);
-                 } currentOffset = headerStartIndex + TDF_HEADER_SIGNATURE.length;
-             } catch (e) { console.error(`[${this.filePath}] Error parsing header at ${headerStartIndex}:`, e); currentOffset = headerStartIndex + 1; }
-        } return this.fonts;
-      }
-     /** Extracts glyph data into intermediate format {w, h, stream: [byte, byte,...]} */
-     extractIntermediateGlyphData(fontMeta, char) { // Extracts to intermediate byte stream
-        const relativeOffset = fontMeta.offsets[char]; if (typeof relativeOffset === 'undefined') return null;
-        const absoluteOffset = fontMeta.dataBlockStartOffset + relativeOffset; if (absoluteOffset + 2 > this.buffer.byteLength) return null;
-        const dataView = new DataView(this.buffer.buffer, this.buffer.byteOffset, this.buffer.byteLength);
-        try {
-            const glyphWidth = dataView.getUint8(absoluteOffset);
-            const glyphHeight = dataView.getUint8(absoluteOffset + 1); // Reported height
-            const byteStream = []; let currentReadOffset = absoluteOffset + 2; let eof = false; let actualHeight = 0; let lineHasChars = false;
+  /**
+   * Constructs a TdfParserNode instance.
+   * @param {Buffer} buffer - The raw buffer data of the TDF file.
+   * @param {string} [filePath='unknown'] - The path to the TDF file, for logging purposes.
+   * @throws {Error} If the buffer is invalid or too small to be a TDF file.
+   */
+  constructor(buffer, filePath = "unknown") {
+    if (!buffer || !(buffer instanceof Buffer) || buffer.byteLength < TDF_FONT_METADATA_BLOCK_SIZE) {
+      // Minimum sensible size
+      throw new Error(`[${filePath}] Invalid or too small TDF buffer provided.`);
+    }
+    this.buffer = buffer;
+    this.filePath = filePath;
+    this.dataView = new DataView(this.buffer.buffer, this.buffer.byteOffset, this.buffer.byteLength);
+    this.fonts = []; // Array to store parsed font metadata objects
+  }
 
-            while (!eof) {
-                if (currentReadOffset >= this.buffer.byteLength) { eof = true; break; }
-                const charByte = dataView.getUint8(currentReadOffset++);
-                if (charByte === 0x00) { eof = true; if (lineHasChars) actualHeight++; }
-                else if (charByte === 0x0D) { byteStream.push(BIN_NEWLINE_CODE); actualHeight++; lineHasChars = false; }
-                else { if (currentReadOffset >= this.buffer.byteLength) { eof = true; break; } const attrByte = dataView.getUint8(currentReadOffset++); byteStream.push(charByte, attrByte); lineHasChars = true; }
-            }
-            if (actualHeight === 0 && byteStream.length > 0) actualHeight = 1; // Min height 1 if data exists
-            return { width: glyphWidth, height: actualHeight > 0 ? actualHeight : 1, stream: byteStream };
-        } catch (e) { console.error(`[${this.filePath}] Intermediate glyph extraction error char "${char}" font "${fontMeta.internalName}":`, e); return null; }
-     }
+  /**
+   * Finds the next occurrence of the TDF_HEADER_SIGNATURE.
+   * @param {number} searchStartOffset - The offset in the buffer to start searching from.
+   * @returns {number} The starting index of the header signature, or -1 if not found.
+   * @private
+   */
+  _findNextTdfHeader(searchStartOffset) {
+    for (let offset = searchStartOffset; offset <= this.buffer.length - TDF_HEADER_SIGNATURE.length; offset++) {
+      if (
+        this.buffer.compare(
+          TDF_HEADER_SIGNATURE,
+          0,
+          TDF_HEADER_SIGNATURE.length,
+          offset,
+          offset + TDF_HEADER_SIGNATURE.length,
+        ) === 0
+      ) {
+        return offset;
+      }
+    }
+    return -1; // Signature not found
+  }
+
+  /**
+   * Extracts metadata for a single font from its TDF header.
+   * @param {number} headerStartIndex - The starting offset of the TDF font header.
+   * @returns {object | null} An object containing font metadata, or null if parsing fails.
+   * @private
+   */
+  _extractFontMetadataFromHeader(headerStartIndex) {
+    const nameLenOffset = headerStartIndex + 4; // Offset from start of header to name length byte
+    const nameCharsOffset = headerStartIndex + 5; // Offset to actual name characters
+    const typeOffset = headerStartIndex + 21; // Offset to font type byte
+    const spacingOffset = headerStartIndex + 22; // Offset to letter spacing byte
+    const blockSizeOffset = headerStartIndex + 23; // Offset to block size (unused by this parser for data start)
+    const charTableOffset = headerStartIndex + 25; // Offset to character offset table
+
+    // Basic boundary check
+    if (headerStartIndex + TDF_FONT_METADATA_BLOCK_SIZE > this.dataView.byteLength) {
+      // console.warn(`[${this.filePath}] Insufficient data for full header at offset ${headerStartIndex}.`);
+      return null;
+    }
+
+    try {
+      const fontNameLength = Math.min(this.dataView.getUint8(nameLenOffset), 12); // Max 12 chars for name
+      let fontName = "";
+      for (let i = 0; i < fontNameLength; i++) {
+        const charCode = this.dataView.getUint8(nameCharsOffset + i);
+        if (charCode === 0) break; // Null terminator for name
+        fontName += String.fromCharCode(charCode);
+      }
+      fontName = fontName.trim();
+
+      const fontType = this.dataView.getUint8(typeOffset);
+      if (fontType !== TDF_COLOR_FONT_TYPE) {
+        // console.log(`[${this.filePath}] Skipping non-color font "${fontName || 'Unnamed'}" (type: ${fontType}) at offset ${headerStartIndex}.`);
+        return null; // Only process color fonts
+      }
+
+      const letterSpacingRaw = this.dataView.getUint8(spacingOffset);
+      const letterSpacing = letterSpacingRaw > 0 ? letterSpacingRaw - 1 : 0; // Adjust raw spacing
+
+      // const tdfBlockSize = this.dataView.getUint16(blockSizeOffset, true); // Little-endian
+
+      const charGlyphOffsets = {};
+      for (let i = 0; i < SUPPORTED_CHAR_LIST.length; i++) {
+        // 94 supported characters
+        const charOffsetInTdf = this.dataView.getUint16(charTableOffset + i * 2, true); // Little-endian
+        if (charOffsetInTdf !== 0xffff) {
+          // 0xFFFF indicates character not defined
+          charGlyphOffsets[SUPPORTED_CHAR_LIST[i]] = charOffsetInTdf;
+        }
+      }
+
+      // The actual character data block starts immediately after the full TDF_FONT_METADATA_BLOCK_SIZE
+      const dataBlockStartOffset = headerStartIndex + TDF_FONT_METADATA_BLOCK_SIZE;
+
+      const baseFilename = path.basename(this.filePath, ".tdf");
+      const sanitizedBase = baseFilename.replace(/[^a-zA-Z0-9_.-]/g, "_"); // Allow more chars in filename part
+      const sanitizedName = fontName.replace(/[^a-zA-Z0-9_.-]/g, "_");
+      const uniqueKey = `${sanitizedBase}_${sanitizedName || "UnnamedFont"}`;
+
+      return {
+        uniqueKey,
+        internalName: fontName,
+        type: fontType,
+        spacing: letterSpacing,
+        // blockSize: tdfBlockSize, // Not directly used for data start, but good to have
+        offsets: charGlyphOffsets,
+        dataBlockStartOffset, // Crucial: where this font's glyph data begins
+      };
+    } catch (e) {
+      console.error(`[${this.filePath}] Error parsing metadata in header at offset ${headerStartIndex}:`, e);
+      return null;
+    }
+  }
+
+  /**
+   * Parses the TDF buffer to find all TDF color font definitions.
+   * It iterates through the buffer, looking for TDF header signatures,
+   * and then extracts metadata for each valid color font found.
+   * @returns {Array<object>} An array of font metadata objects. Each object contains
+   * `uniqueKey`, `internalName`, `type`, `spacing`, `offsets` (map of char to TDF offset),
+   * and `dataBlockStartOffset`.
+   */
+  parse() {
+    this.fonts = [];
+    let currentSearchOffset = 0;
+
+    // Basic TDF file structure validation (optional, but good practice)
+    // A TDF file typically starts with 0x13 and ends with 0x1A at offset 19 from start.
+    // This is a weak check as content might vary.
+    if (this.dataView.byteLength < 20 || this.dataView.getUint8(0) !== 0x13 || this.dataView.getUint8(19) !== 0x1a) {
+      // console.warn(`[${this.filePath}] TDF file structure validation failed (outer signature). Processing may be unreliable.`);
+    }
+
+    while (currentSearchOffset < this.buffer.length) {
+      const headerStartIndex = this._findNextTdfHeader(currentSearchOffset);
+      if (headerStartIndex === -1) {
+        break; // No more headers found
+      }
+
+      const fontMetadata = this._extractFontMetadataFromHeader(headerStartIndex);
+      if (fontMetadata) {
+        this.fonts.push(fontMetadata);
+      }
+
+      // Move past the current header to search for the next one
+      currentSearchOffset = headerStartIndex + TDF_HEADER_SIGNATURE.length;
+    }
+    return this.fonts;
+  }
+
+  /**
+   * Extracts the glyph data for a given character from a specific font definition.
+   * The data is returned in an intermediate format: { width, height, stream: [byte, byte, ...] }.
+   * The stream contains character codes and attribute bytes, with newlines converted to BIN_STREAM_NEWLINE_CODE.
+   * Height is recalculated based on actual newline characters in the stream.
+   *
+   * @param {object} fontMeta - The metadata object for the font (from `parse()` method).
+   * @param {string} char - The character for which to extract glyph data (e.g., 'A', '!', ' ').
+   * @returns {{width: number, height: number, stream: Array<number>} | null}
+   * The intermediate glyph data, or null if the character is not defined or an error occurs.
+   */
+  extractIntermediateGlyphData(fontMeta, char) {
+    const relativeOffset = fontMeta.offsets[char];
+    if (typeof relativeOffset === "undefined") {
+      return null; // Character not defined in this font's offset table
+    }
+
+    const absoluteOffset = fontMeta.dataBlockStartOffset + relativeOffset;
+
+    // Basic boundary check for reading width and height
+    if (absoluteOffset + 2 > this.buffer.byteLength) {
+      // console.warn(`[${this.filePath}] Insufficient data for glyph header: char "${char}", font "${fontMeta.internalName}" at offset ${absoluteOffset}.`);
+      return null;
+    }
+
+    try {
+      const glyphWidthInCells = this.dataView.getUint8(absoluteOffset);
+      // const _glyphHeightInLinesReported = this.dataView.getUint8(absoluteOffset + 1); // Height reported in TDF
+
+      const byteStream = [];
+      let currentReadOffset = absoluteOffset + 2; // Start reading after width and height bytes
+      let endOfGlyphStream = false;
+      let actualHeightInLines = 0;
+      let currentLineHasChars = false;
+
+      while (!endOfGlyphStream) {
+        if (currentReadOffset >= this.buffer.byteLength) {
+          // console.warn(`[${this.filePath}] Unexpected end of buffer while reading glyph stream: char "${char}", font "${fontMeta.internalName}".`);
+          endOfGlyphStream = true; // Treat as end of glyph if buffer ends
+          break;
+        }
+
+        const charByte = this.dataView.getUint8(currentReadOffset++);
+
+        if (charByte === 0x00) {
+          // Null terminator for the glyph stream in TDF
+          endOfGlyphStream = true;
+          if (currentLineHasChars) {
+            // If the last line had content before null terminator
+            actualHeightInLines++;
+          }
+        } else if (charByte === 0x0d) {
+          // Carriage return in TDF, represents a newline in the glyph
+          byteStream.push(BIN_STREAM_NEWLINE_CODE); // Convert to our binary format's newline
+          actualHeightInLines++;
+          currentLineHasChars = false;
+        } else {
+          // This is a character code. The next byte should be its attribute.
+          if (currentReadOffset >= this.buffer.byteLength) {
+            // Check before reading attribute
+            // console.warn(`[${this.filePath}] Unexpected end of buffer expecting attribute byte: char "${char}", font "${fontMeta.internalName}".`);
+            endOfGlyphStream = true; // Treat as error/end
+            break;
+          }
+          const attrByte = this.dataView.getUint8(currentReadOffset++);
+          byteStream.push(charByte, attrByte);
+          currentLineHasChars = true;
+        }
+      }
+
+      // If stream has content but no newlines were counted (single-line glyph)
+      if (actualHeightInLines === 0 && byteStream.length > 0) {
+        actualHeightInLines = 1;
+      }
+      // Ensure minimum height of 1 if any data, even if it's just a newline code (empty line)
+      if (actualHeightInLines === 0 && byteStream.some((b) => b === BIN_STREAM_NEWLINE_CODE)) {
+        actualHeightInLines = 1;
+      }
+
+      return {
+        width: glyphWidthInCells,
+        height: actualHeightInLines > 0 ? actualHeightInLines : 1, // Ensure minimum height of 1 line
+        stream: byteStream,
+      };
+    } catch (e) {
+      console.error(
+        `[${this.filePath}] Error during intermediate glyph extraction for char "${char}", font "${fontMeta.internalName}":`,
+        e,
+      );
+      return null;
+    }
+  }
 } // End TdfParserNode Class
 
+// --- Bundle Building Logic ---
 
-// --- Main Script Logic ---
+/**
+ * Prepares the string pool and initial font index table data.
+ * @param {Array<object>} allFontsIntermediate - Array of intermediate font data.
+ * @returns {{fontIndexTableData: Array<object>, stringPoolBuffer: Buffer}}
+ * `fontIndexTableData` contains {keyOffset, dataOffset (placeholder)} entries.
+ * `stringPoolBuffer` is the concatenated buffer of null-terminated font keys.
+ * @private
+ */
+function _buildStringPoolAndIndexPlaceholders(allFontsIntermediate) {
+  const fontIndexTableData = []; // Stores { keyOffsetInPool, dataOffsetInPool (placeholder) }
+  const stringPoolBuffers = [];
+  let currentStringOffset = 0;
 
-function main() {
-    const args = process.argv.slice(2);
-    if (args.length < 2) { console.error("Usage: node preprocess_tdf.js <input_tdf_dir> <output_bin_file>"); process.exit(1); }
-    const inputDir = args[0]; const outputFile = args[1];
-
-    const allFontsIntermediate = []; // Array to store { uniqueKey, spacing, glyphs: { char: {w,h,stream} } }
-    let filesProcessed = 0;
-
-    console.log(`Processing TDF files in directory: ${inputDir}`);
-    try {
-        const files = fs.readdirSync(inputDir);
-        files.forEach(file => {
-            if (path.extname(file).toLowerCase() !== '.tdf') return;
-            const filePath = path.join(inputDir, file);
-            try {
-                const buffer = fs.readFileSync(filePath);
-                const parser = new TdfParserNode(buffer, filePath);
-                const parsedFontsInFile = parser.parse(); // Gets metadata
-
-                parsedFontsInFile.forEach(fontMeta => {
-                    const processedGlyphs = {}; let glyphsInFont = 0;
-                    for (const char of SUPPORTED_CHAR_LIST) {
-                        const glyphIntermediate = parser.extractIntermediateGlyphData(fontMeta, char);
-                        if (glyphIntermediate) { processedGlyphs[char] = glyphIntermediate; glyphsInFont++; }
-                    }
-                    if (glyphsInFont > 0) {
-                        allFontsIntermediate.push({ uniqueKey: fontMeta.uniqueKey, spacing: fontMeta.spacing, glyphs: processedGlyphs });
-                    } else { console.warn(`[${filePath}] Font "${fontMeta.internalName}" had no glyphs.`); }
-                });
-                filesProcessed++;
-            } catch (readError) { console.error(`Error processing file ${filePath}:`, readError); }
-        });
-    } catch (dirError) { console.error(`Error accessing input directory ${inputDir}:`, dirError); process.exit(1); }
-
-    console.log(`Processed ${filesProcessed} TDF files. Found ${allFontsIntermediate.length} Color fonts with glyphs.`);
-    if (allFontsIntermediate.length === 0) { console.log("No data to write."); return; }
-
-    // --- Build Binary Bundle ---
-    console.log("Building binary bundle...");
-
-    // 1. Sort fonts by uniqueKey for the index
-    allFontsIntermediate.sort((a, b) => a.uniqueKey.localeCompare(b.uniqueKey));
-
-    // 2. Prepare String Pool and Font Index data
-    const fontIndexTableData = []; // Stores { keyOffset, dataOffset }
-    const stringPoolBuffers = [];
-    let currentStringOffset = 0;
-    allFontsIntermediate.forEach(fontInfo => {
-        const keyBuffer = Buffer.from(fontInfo.uniqueKey + '\0', 'utf8'); // Null terminate
-        stringPoolBuffers.push(keyBuffer);
-        fontIndexTableData.push({ keyOffset: currentStringOffset, dataOffset: 0 }); // Placeholder for data offset
-        currentStringOffset += keyBuffer.length;
+  for (const fontInfo of allFontsIntermediate) {
+    const keyBuffer = Buffer.from(`${fontInfo.uniqueKey}\0`, "utf8"); // Null-terminate the key
+    stringPoolBuffers.push(keyBuffer);
+    fontIndexTableData.push({
+      keyOffsetInPool: currentStringOffset,
+      dataOffsetInPool: 0, // Placeholder, will be updated later
     });
-    const stringPoolBuffer = Buffer.concat(stringPoolBuffers);
+    currentStringOffset += keyBuffer.length;
+  }
 
-    // 3. Prepare Font Data Pool and update data offsets in index
-    const fontDataPoolBuffers = [];
-    let currentDataOffset = 0;
-    allFontsIntermediate.forEach((fontInfo, index) => {
-        fontIndexTableData[index].dataOffset = currentDataOffset; // Update data offset for this font
-
-        const fontSpecificBuffers = [];
-        // Write spacing
-        const spacingBuf = Buffer.alloc(1); spacingBuf.writeUInt8(fontInfo.spacing, 0);
-        fontSpecificBuffers.push(spacingBuf);
-
-        // Prepare glyph lookup table and glyph data bytes
-        const glyphEntries = Object.entries(fontInfo.glyphs).sort((a, b) => a[0].charCodeAt(0) - b[0].charCodeAt(0)); // Sort by char code
-        const glyphCount = glyphEntries.length;
-        const glyphCountBuf = Buffer.alloc(1); glyphCountBuf.writeUInt8(glyphCount, 0);
-        fontSpecificBuffers.push(glyphCountBuf);
-
-        const lookupTableSize = glyphCount * 3; // 1 byte char, 2 bytes offset
-        const lookupTableBuf = Buffer.alloc(lookupTableSize);
-        const glyphDataBuffers = [];
-        let currentGlyphDataRelativeOffset = 0; // Offset relative to start of GDT for this font
-
-        glyphEntries.forEach(([char, glyph], i) => {
-            // Write lookup entry
-            const lookupOffset = i * 3;
-            lookupTableBuf.writeUInt8(char.charCodeAt(0), lookupOffset);
-            lookupTableBuf.writeUInt16LE(currentGlyphDataRelativeOffset, lookupOffset + 1);
-
-            // Prepare glyph data buffer
-            const glyphHeaderBuf = Buffer.alloc(2);
-            glyphHeaderBuf.writeUInt8(glyph.width, 0);
-            glyphHeaderBuf.writeUInt8(glyph.height, 1);
-            const glyphStreamBuf = Buffer.from(glyph.stream);
-            const glyphEndBuf = Buffer.alloc(1); glyphEndBuf.writeUInt8(BIN_GLYPH_TERMINATOR, 0); // Null terminator
-
-            const singleGlyphBuf = Buffer.concat([glyphHeaderBuf, glyphStreamBuf, glyphEndBuf]);
-            glyphDataBuffers.push(singleGlyphBuf);
-            currentGlyphDataRelativeOffset += singleGlyphBuf.length;
-        });
-
-        fontSpecificBuffers.push(lookupTableBuf);
-        fontSpecificBuffers.push(...glyphDataBuffers); // Add all glyph data buffers
-
-        const fontDataBlock = Buffer.concat(fontSpecificBuffers);
-        fontDataPoolBuffers.push(fontDataBlock);
-        currentDataOffset += fontDataBlock.length;
-    });
-    const fontDataPoolBuffer = Buffer.concat(fontDataPoolBuffers);
-
-    // 4. Prepare final Font Index Table buffer
-    const fontIndexTableBuf = Buffer.alloc(allFontsIntermediate.length * 8); // 4 bytes key offset, 4 bytes data offset
-    fontIndexTableData.forEach((entry, i) => {
-        fontIndexTableBuf.writeUInt32LE(entry.keyOffset, i * 8);
-        fontIndexTableBuf.writeUInt32LE(entry.dataOffset, i * 8 + 4);
-    });
-
-    // 5. Prepare Header
-    const headerSize = 21; // Magic(4) + Ver(1) + Count(4) + IdxOff(4) + StrOff(4) + DataOff(4)
-    const headerBuf = Buffer.alloc(headerSize);
-    let offset = 0;
-    offset += headerBuf.write(BIN_MAGIC, offset, 'ascii');
-    offset = headerBuf.writeUInt8(BIN_VERSION, offset);
-    offset = headerBuf.writeUInt32LE(allFontsIntermediate.length, offset); // Font Count
-    const indexTableOffset = headerSize;
-    const stringPoolOffset = indexTableOffset + fontIndexTableBuf.length;
-    const fontDataPoolOffset = stringPoolOffset + stringPoolBuffer.length;
-    offset = headerBuf.writeUInt32LE(indexTableOffset, offset);
-    offset = headerBuf.writeUInt32LE(stringPoolOffset, offset);
-    headerBuf.writeUInt32LE(fontDataPoolOffset, offset);
-
-    // 6. Concatenate all parts
-    const finalBuffer = Buffer.concat([
-        headerBuf,
-        fontIndexTableBuf,
-        stringPoolBuffer,
-        fontDataPoolBuffer
-    ]);
-
-    // 7. Write to file
-    console.log(`Writing binary bundle (${finalBuffer.length} bytes) to: ${outputFile}`);
-    try {
-        fs.writeFileSync(outputFile, finalBuffer);
-        console.log("Binary bundle created successfully.");
-    } catch (writeError) {
-        console.error(`Error writing binary file ${outputFile}:`, writeError);
-    }
+  const stringPoolBuffer = Buffer.concat(stringPoolBuffers);
+  return { fontIndexTableData, stringPoolBuffer };
 }
 
+/**
+ * Prepares the font data pool.
+ * Each font's data includes: spacing, glyph count, glyph lookup table, and glyph data streams.
+ * Also updates the `dataOffsetInPool` in the `fontIndexTableData` array.
+ * @param {Array<object>} allFontsIntermediate - Array of intermediate font data.
+ * @param {Array<object>} fontIndexTableData - Array of index entries to be updated.
+ * @returns {Buffer} The concatenated buffer of all font data blocks.
+ * @private
+ */
+function _buildFontDataPool(allFontsIntermediate, fontIndexTableData) {
+  const fontDataPoolBuffers = [];
+  let currentDataPoolOffset = 0;
+
+  for (const [fontArrIndex, fontInfo] of allFontsIntermediate.entries()) {
+    fontIndexTableData[fontArrIndex].dataOffsetInPool = currentDataPoolOffset; // Update actual data offset
+
+    const singleFontBlockBuffers = [];
+
+    // 1. Font Spacing (1 byte)
+    const spacingBuffer = Buffer.alloc(1);
+    spacingBuffer.writeUInt8(fontInfo.spacing, 0);
+    singleFontBlockBuffers.push(spacingBuffer);
+
+    // 2. Glyph Count for this font (1 byte)
+    const glyphEntries = Object.entries(fontInfo.glyphs).sort((a, b) => a[0].charCodeAt(0) - b[0].charCodeAt(0)); // Sort glyphs by char code for lookup table
+
+    const glyphCount = glyphEntries.length;
+    const glyphCountBuffer = Buffer.alloc(1);
+    glyphCountBuffer.writeUInt8(glyphCount, 0);
+    singleFontBlockBuffers.push(glyphCountBuffer);
+
+    // 3. Glyph Lookup Table (GLT)
+    // Each entry: 1 byte charCode, 2 bytes offset (Uint16LE) relative to start of Glyph Data Table (GDT)
+    const lookupTableSizeBytes = glyphCount * 3;
+    const lookupTableBuffer = Buffer.alloc(lookupTableSizeBytes);
+    const glyphDataStreamBuffers = []; // To store actual data for each glyph
+    let currentGlyphDataRelativeOffset = 0; // Offset relative to start of this font's GDT
+
+    for (const [entryIndex, [char, glyphData]] of glyphEntries.entries()) {
+      const lookupTableEntryOffset = entryIndex * 3;
+      lookupTableBuffer.writeUInt8(char.charCodeAt(0), lookupTableEntryOffset);
+      lookupTableBuffer.writeUInt16LE(currentGlyphDataRelativeOffset, lookupTableEntryOffset + 1);
+
+      // Prepare this glyph's data: Width (1b), Height (1b), Stream (variable), Terminator (1b)
+      const glyphHeaderBuffer = Buffer.alloc(2);
+      glyphHeaderBuffer.writeUInt8(glyphData.width, 0); // Precalculated width in cells
+      glyphHeaderBuffer.writeUInt8(glyphData.height, 1); // Precalculated height in lines
+
+      const glyphStreamBuffer = Buffer.from(glyphData.stream); // The [charCode, attrByte, ...] sequence
+
+      const glyphEndTerminatorBuffer = Buffer.alloc(1);
+      glyphEndTerminatorBuffer.writeUInt8(BIN_STREAM_GLYPH_TERMINATOR, 0);
+
+      const completeSingleGlyphBuffer = Buffer.concat([glyphHeaderBuffer, glyphStreamBuffer, glyphEndTerminatorBuffer]);
+      glyphDataStreamBuffers.push(completeSingleGlyphBuffer);
+      currentGlyphDataRelativeOffset += completeSingleGlyphBuffer.length;
+    }
+
+    singleFontBlockBuffers.push(lookupTableBuffer); // Add the GLT for this font
+    singleFontBlockBuffers.push(...glyphDataStreamBuffers); // Add all GDT entries for this font
+
+    const completeFontDataBlock = Buffer.concat(singleFontBlockBuffers);
+    fontDataPoolBuffers.push(completeFontDataBlock);
+    currentDataPoolOffset += completeFontDataBlock.length;
+  }
+
+  return Buffer.concat(fontDataPoolBuffers);
+}
+
+/**
+ * Prepares the final Font Index Table buffer from the populated data.
+ * @param {Array<object>} fontIndexTableData - Array of {keyOffsetInPool, dataOffsetInPool}.
+ * @param {number} numFonts - The total number of fonts.
+ * @returns {Buffer} The finalized Font Index Table buffer.
+ * @private
+ */
+function _finalizeFontIndexTable(fontIndexTableData, numFonts) {
+  // Each entry: 4 bytes keyOffset (UInt32LE), 4 bytes dataOffset (UInt32LE)
+  const fontIndexTableBuffer = Buffer.alloc(numFonts * 8);
+  for (const [i, entry] of fontIndexTableData.entries()) {
+    fontIndexTableBuffer.writeUInt32LE(entry.keyOffsetInPool, i * 8);
+    fontIndexTableBuffer.writeUInt32LE(entry.dataOffsetInPool, i * 8 + 4);
+  }
+  return fontIndexTableBuffer;
+}
+
+/**
+ * Prepares the main header for the binary bundle.
+ * @param {number} numFonts - Total number of fonts in the bundle.
+ * @param {number} finalIndexTableBufferLength - Length of the finalized font index table.
+ * @param {number} finalStringPoolBufferLength - Length of the finalized string pool.
+ * @returns {Buffer} The header buffer.
+ * @private
+ */
+function _buildBundleHeader(numFonts, finalIndexTableBufferLength, finalStringPoolBufferLength) {
+  // Header structure:
+  // Magic String (4 bytes: 'TDFB')
+  // Version (1 byte: UInt8)
+  // Font Count (4 bytes: UInt32LE)
+  // Index Table Offset (4 bytes: UInt32LE)  -- relative to start of file
+  // String Pool Offset (4 bytes: UInt32LE)  -- relative to start of file
+  // Font Data Pool Offset (4 bytes: UInt32LE) -- relative to start of file
+  const headerSize = 4 + 1 + 4 + 4 + 4 + 4; // 21 bytes
+  const headerBuffer = Buffer.alloc(headerSize);
+  let currentHeaderOffset = 0;
+
+  currentHeaderOffset += headerBuffer.write(BIN_MAGIC_STRING, currentHeaderOffset, "ascii");
+  currentHeaderOffset = headerBuffer.writeUInt8(BIN_BUNDLE_VERSION, currentHeaderOffset);
+  currentHeaderOffset = headerBuffer.writeUInt32LE(numFonts, currentHeaderOffset);
+
+  const indexTableAbsoluteOffset = headerSize;
+  const stringPoolAbsoluteOffset = indexTableAbsoluteOffset + finalIndexTableBufferLength;
+  const fontDataPoolAbsoluteOffset = stringPoolAbsoluteOffset + finalStringPoolBufferLength;
+
+  currentHeaderOffset = headerBuffer.writeUInt32LE(indexTableAbsoluteOffset, currentHeaderOffset);
+  currentHeaderOffset = headerBuffer.writeUInt32LE(stringPoolAbsoluteOffset, currentHeaderOffset);
+  headerBuffer.writeUInt32LE(fontDataPoolAbsoluteOffset, currentHeaderOffset); // Last write, offset not incremented
+
+  return headerBuffer;
+}
+
+/**
+ * Main function to drive the TDF preprocessing and bundle creation.
+ * Reads TDF files from an input directory, parses them, extracts glyph data,
+ * and then constructs a single binary bundle file.
+ */
+function main() {
+  const args = process.argv.slice(2);
+  if (args.length < 2) {
+    console.error("Usage: node preprocess_tdf.js <input_tdf_directory> <output_bin_file_path>");
+    console.error("Example: node preprocess_tdf.js ./my_tdf_fonts ./dist/font_bundle.bin");
+    process.exit(1);
+  }
+  const inputDirectory = args[0];
+  const outputFilePath = args[1];
+
+  const allFontsIntermediateData = []; // Stores { uniqueKey, spacing, glyphs: { char: {w,h,stream} } }
+  let filesSuccessfullyProcessed = 0;
+
+  console.log("Starting TDF preprocessing...");
+  console.log(`Input directory: ${path.resolve(inputDirectory)}`);
+  console.log(`Output file:     ${path.resolve(outputFilePath)}`);
+
+  // --- Step 1: Read and Parse TDF files ---
+  try {
+    const filesInDir = fs.readdirSync(inputDirectory);
+    for (const file of filesInDir) {
+      if (path.extname(file).toLowerCase() !== ".tdf") {
+        return; // Skip non-TDF files
+      }
+      const fullFilePath = path.join(inputDirectory, file);
+      // console.log(`Processing TDF file: ${file}`);
+      try {
+        const tdfFileBuffer = fs.readFileSync(fullFilePath);
+        const parser = new TdfParserNode(tdfFileBuffer, fullFilePath);
+        const parsedFontsInCurrentFile = parser.parse(); // Gets metadata for all fonts in this TDF
+
+        for (const fontMetadata of parsedFontsInCurrentFile) {
+          const extractedGlyphs = {};
+          let glyphsFoundInThisFont = 0;
+          for (const char of SUPPORTED_CHAR_LIST) {
+            const glyphIntermediate = parser.extractIntermediateGlyphData(fontMetadata, char);
+            if (glyphIntermediate) {
+              extractedGlyphs[char] = glyphIntermediate;
+              glyphsFoundInThisFont++;
+            }
+          }
+
+          if (glyphsFoundInThisFont > 0) {
+            allFontsIntermediateData.push({
+              uniqueKey: fontMetadata.uniqueKey,
+              spacing: fontMetadata.spacing,
+              glyphs: extractedGlyphs,
+            });
+            // console.log(`  Added font: ${fontMetadata.uniqueKey} with ${glyphsFoundInThisFont} glyphs.`);
+          } else {
+            // console.warn(`[${fullFilePath}] Font "${fontMetadata.internalName}" had no supported glyphs extracted.`);
+          }
+        }
+        filesSuccessfullyProcessed++;
+      } catch (readOrParseError) {
+        console.error(`Error processing file ${fullFilePath}:`, readOrParseError.message);
+      }
+    }
+  } catch (dirAccessError) {
+    console.error(`Fatal error accessing input directory ${inputDirectory}:`, dirAccessError.message);
+    process.exit(1);
+  }
+
+  console.log(`\nSuccessfully processed ${filesSuccessfullyProcessed} TDF files.`);
+  console.log(`Found ${allFontsIntermediateData.length} TDF color fonts with extractable glyphs.`);
+
+  if (allFontsIntermediateData.length === 0) {
+    console.log("No font data to write to bundle. Exiting.");
+    return;
+  }
+
+  // --- Step 2: Sort fonts by uniqueKey for consistent index ---
+  allFontsIntermediateData.sort((a, b) => a.uniqueKey.localeCompare(b.uniqueKey));
+  // console.log("\nFonts sorted for bundle indexing.");
+
+  // --- Step 3: Build Binary Bundle Components ---
+  console.log("\nBuilding binary bundle components...");
+
+  // 3a. Prepare String Pool and initial Font Index data (with placeholder data offsets)
+  const { fontIndexTableData, stringPoolBuffer } = _buildStringPoolAndIndexPlaceholders(allFontsIntermediateData);
+  // console.log(`  String Pool created (${stringPoolBuffer.length} bytes).`);
+
+  // 3b. Prepare Font Data Pool (actual glyph data) and update data offsets in fontIndexTableData
+  const fontDataPoolBuffer = _buildFontDataPool(allFontsIntermediateData, fontIndexTableData);
+  // console.log(`  Font Data Pool created (${fontDataPoolBuffer.length} bytes).`);
+
+  // 3c. Prepare final Font Index Table buffer (with updated data offsets)
+  const numFonts = allFontsIntermediateData.length;
+  const finalFontIndexTableBuffer = _finalizeFontIndexTable(fontIndexTableData, numFonts);
+  // console.log(`  Font Index Table finalized (${finalFontIndexTableBuffer.length} bytes).`);
+
+  // 3d. Prepare Header
+  const headerBuffer = _buildBundleHeader(numFonts, finalFontIndexTableBuffer.length, stringPoolBuffer.length);
+  // console.log(`  Bundle Header created (${headerBuffer.length} bytes).`);
+
+  // --- Step 4: Concatenate all parts to form the final bundle ---
+  const finalBundleBuffer = Buffer.concat([
+    headerBuffer,
+    finalFontIndexTableBuffer,
+    stringPoolBuffer,
+    fontDataPoolBuffer,
+  ]);
+
+  // --- Step 5: Write bundle to output file ---
+  console.log(`\nWriting binary bundle (${finalBundleBuffer.length} bytes) to: ${outputFilePath}`);
+  try {
+    // Ensure output directory exists
+    const outputDir = path.dirname(outputFilePath);
+    if (!fs.existsSync(outputDir)) {
+      fs.mkdirSync(outputDir, { recursive: true });
+      // console.log(`  Created output directory: ${outputDir}`);
+    }
+
+    fs.writeFileSync(outputFilePath, finalBundleBuffer);
+    console.log("Binary font bundle created successfully!");
+  } catch (writeError) {
+    console.error(`Fatal error writing binary file ${outputFilePath}:`, writeError.message);
+    process.exit(1);
+  }
+}
+
+// Execute the main script function
 main();
