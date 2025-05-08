@@ -106,7 +106,7 @@
 
     try {
       return new TextDecoder().decode(stringBytes);
-    } catch (e) {
+    } catch {
       // Fallback for older environments or specific TextDecoder issues.
       // Note: String.fromCharCode can have issues with large strings or non-BMP chars,
       // but likely acceptable for font keys.
