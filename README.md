@@ -10,7 +10,7 @@ It uses an underlying JavaScript library (`tdfRenderer.js`) to handle the font l
 
 The core CP437 character rendering logic was adapted from my earlier library, [escapes.js](https://github.com/atdt/escapes.js).
 
-The TDF-specific parsing (`preprocess_tdf.js`, `tdfRenderer.js`), the binary data bundling strategy, multi-font handling, and the rendering logic were developed primarily through interaction with an AI assistant (Google's Gemini), based on the TDF specification, examples like `tdfgo`, and specific feature requests during development.
+The TDF-specific parsing (`tdfPacker.js`, `tdfRenderer.js`), the binary data bundling strategy, multi-font handling, and the rendering logic were developed primarily through interaction with an AI assistant (Google's Gemini), based on the TDF specification, examples like `tdfgo`, and specific feature requests during development.
 
 ## Features
 
@@ -28,10 +28,10 @@ The TDF-specific parsing (`preprocess_tdf.js`, `tdfRenderer.js`), the binary dat
 To run the `index.html` web application, you need to preprocess your `.TDF` font collection into the binary bundle format:
 
 1.  **Gather Fonts:** Place your `.TDF` files into a directory (e.g., `tdf_fonts/`).
-2.  **Preprocess:** This project includes `preprocess_tdf.js`. You'll need Node.js installed. Run the script to generate the necessary `tdf_bundle.bin`:
+2.  **Preprocess:** This project includes `tdfPacker.js`. You'll need Node.js installed. Run the script to generate the necessary `tdf_bundle.bin`:
     ```bash
     # Run the preprocessor script
-    node preprocess_tdf.js path/to/your/tdf_fonts path/to/output/tdf_bundle.bin
+    node tdfPacker.js path/to/your/tdf_fonts path/to/output/tdf_bundle.bin
     ```
     *(Make sure `tdf_bundle.bin` is saved where `index.html` can fetch it).*
 3.  **CP437 Font Data:** The renderer requires CP437 bitmap data. Create a `cp437font.js` file that assigns the font data array to `globalThis.cp437font`. This file must be loaded *before* `tdfRenderer.js`.
@@ -59,7 +59,7 @@ After completing the setup:
 
 ## Binary Bundle Format (`tdf_bundle.bin`)
 
-The `preprocess_tdf.js` script generates a binary file containing all necessary data extracted from the TDF Color fonts. The format is structured as follows (all multi-byte values are Little Endian):
+The `tdfPacker.js` script generates a binary file containing all necessary data extracted from the TDF Color fonts. The format is structured as follows (all multi-byte values are Little Endian):
 
 1.  **Header** (21 Bytes Total)
     * Magic String: `TDFB` (4 bytes ASCII)
