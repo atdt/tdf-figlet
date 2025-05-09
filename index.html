@@ -2,115 +2,371 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>TDF Figlet Designer</title>
     <style>
-        /* Styles optimized for clarity and compactness */
+        /* --- Base Styles --- */
         body {
-            font-family: 'Courier New', Courier, monospace; background-color: #1a1a1a; color: #ccc;
-            margin: 0; padding: 0; display: flex; flex-direction: column; height: 100vh; overflow: hidden;
+            font-family: 'Courier New', Courier, monospace;
+            background-color: #1a1a1a;
+            color: #ccc;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            overflow: hidden; /* Prevent body scrollbars, allow internal scroll */
         }
+
+        /* --- Header & Controls --- */
         header.controls {
-            background-color: #2a2a2a; padding: 8px 15px; border-bottom: 1px solid #444;
-            display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; justify-content: center;
-            width: 100%; box-sizing: border-box; z-index: 10; flex-shrink: 0;
+            background-color: #2a2a2a;
+            padding: 10px 15px; /* Increased padding slightly */
+            border-bottom: 1px solid #444;
+            display: flex;
+            flex-wrap: wrap; /* Allow controls to wrap on smaller screens */
+            gap: 10px 15px; /* Increased gap slightly */
+            align-items: center;
+            justify-content: center;
+            width: 100%;
+            box-sizing: border-box;
+            z-index: 10; /* Keep controls on top */
+            flex-shrink: 0; /* Prevent header from shrinking */
         }
+
+        /* --- Form Elements --- */
         textarea {
-            height: 35px; flex-basis: auto; flex-grow: 1; min-width: 150px; padding: 6px;
-            border-radius: 0; border: 1px solid #555; background-color: #111; color: #eee;
-            font-family: inherit; resize: vertical; font-size: 0.9em;
+            height: 38px; /* Slightly taller for better click target */
+            flex-basis: auto; /* Allow natural sizing */
+            flex-grow: 1;
+            min-width: 180px; /* Increased min-width */
+            padding: 8px;
+            border-radius: 3px; /* Subtle rounding */
+            border: 1px solid #555;
+            background-color: #111;
+            color: #eee;
+            font-family: inherit;
+            resize: vertical;
+            font-size: 0.9em;
+            line-height: 1.4; /* Improved text readability */
         }
-        select, button, input[type="number"], label {
-            font-size: 0.8em; padding: 5px 8px; border-radius: 0; border: 1px solid #555;
-            background-color: #3a3a3a; color: #eee; font-family: inherit; vertical-align: middle;
+
+        select,
+        button,
+        input[type="number"],
+        label {
+            font-size: 0.85em; /* Slightly larger for readability */
+            padding: 7px 10px; /* Increased padding */
+            border-radius: 3px; /* Subtle rounding */
+            border: 1px solid #555;
+            background-color: #3a3a3a;
+            color: #eee;
+            font-family: inherit;
+            vertical-align: middle;
         }
-        button { cursor: pointer; } button:hover { background-color: #4a4a4a; } button:disabled { cursor: not-allowed; opacity: 0.6; }
-        label { border: none; background: none; padding: 0 3px 0 0; cursor: default; }
-        input[type="checkbox"], input[type="radio"] { margin-right: 3px; cursor: pointer; vertical-align: middle; }
-        label[for^="filter-"], label[for^="random-"], label[for^="align-"], label[for="scale-factor"] { cursor: pointer; padding-right: 8px; }
-        #font-select { min-width: 150px; max-width: 200px; flex-grow: 1; }
-        #min-space { width: 3em; padding: 5px; }
-        #scale-factor { width: 4.5em; } /* Adjust width for scale dropdown */
-        .option-group { display: flex; align-items: center; gap: 5px; flex-wrap: nowrap; padding: 2px 5px; border: 1px solid #444; }
-        main { flex-grow: 1; width: 100%; display: flex; flex-direction: column; overflow: hidden; }
-        #status { padding: 4px 20px; font-style: italic; color: #777; height: 1.2em; font-size: 0.8em; text-align: center; flex-shrink: 0; border-bottom: 1px solid #333; }
-        #canvas-container { flex-grow: 1; width: 100%; overflow-y: auto; display: flex; flex-direction: column; align-items: center; gap: 15px; padding: 15px 0; box-sizing: border-box; }
-        /* Apply pixelated rendering to the container so dynamically added canvases inherit it */
+
+        button {
+            cursor: pointer;
+            transition: background-color 0.2s ease; /* Smooth hover transition */
+        }
+
+        button:hover {
+            background-color: #4a4a4a;
+        }
+
+        button:disabled {
+            cursor: not-allowed;
+            opacity: 0.6;
+        }
+
+        label { /* Reset label styles for specific uses */
+            border: none;
+            background: none;
+            padding: 0 5px 0 0; /* Adjusted padding */
+            cursor: default;
+        }
+
+        input[type="checkbox"],
+        input[type="radio"] {
+            margin-right: 4px;
+            cursor: pointer;
+            vertical-align: middle;
+        }
+
+        /* Specific labels for better interaction */
+        label[for^="filter-"],
+        label[for^="random-"],
+        label[for^="align-"],
+        label[for="scale-factor"],
+        label[for="min-space"] { /* Added min-space label */
+            cursor: pointer;
+            padding-right: 8px;
+        }
+
+        #font-select {
+            min-width: 180px; /* Increased min-width */
+            max-width: 220px; /* Increased max-width */
+            flex-grow: 1;
+        }
+
+        #min-space {
+            width: 3.5em; /* Slightly wider */
+            padding: 7px;
+        }
+
+        #scale-factor {
+            width: 5em; /* Adjusted width */
+        }
+
+        .option-group {
+            display: flex;
+            align-items: center;
+            gap: 6px; /* Consistent gap */
+            flex-wrap: nowrap; /* Prevent internal wrapping */
+            padding: 3px 6px;
+            border: 1px solid #444;
+            border-radius: 3px; /* Subtle rounding for groups */
+        }
+
+        /* --- Main Content Area --- */
+        main {
+            flex-grow: 1;
+            width: 100%;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden; /* Prevent main from overflowing body */
+        }
+
+        #status {
+            padding: 5px 20px;
+            font-style: italic;
+            color: #888; /* Softer status color */
+            height: 1.3em;
+            font-size: 0.8em;
+            text-align: center;
+            flex-shrink: 0;
+            border-bottom: 1px solid #333;
+            line-height: 1.3em; /* Ensure text fits */
+        }
+
+        #canvas-container {
+            flex-grow: 1;
+            width: 100%;
+            overflow-y: auto; /* Allow vertical scroll for canvases */
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 20px; /* Increased gap between font blocks */
+            padding: 20px 0; /* Add padding top and bottom */
+            box-sizing: border-box;
+        }
+
+        /* --- Canvas & Font Block Styling --- */
         #canvas-container canvas {
             display: block;
-            border: 1px dashed #444;
-            background-color: #000;
-            image-rendering: pixelated; /* Keep pixels sharp */
-            image-rendering: -moz-crisp-edges; /* Firefox */
-            image-rendering: crisp-edges; /* Newer spec */
-            max-width: 100%;
-            padding: 20px; /* User specified 20px */
-            box-sizing: border-box;
-            margin: auto;
+            border: 1px dashed #555; /* Slightly lighter dash */
+            background-color: #000; /* Explicit black background */
+            image-rendering: pixelated;
+            image-rendering: -moz-crisp-edges;
+            image-rendering: crisp-edges;
+            max-width: 100%; /* Ensure canvas doesn't overflow container */
+            padding: 20px; /* User-specified padding around the rendered art */
+            box-sizing: border-box; /* Padding included in width/height */
+            margin: auto; /* Center canvas if it's narrower than its block */
+            border-radius: 2px; /* Subtle rounding for canvas itself */
         }
-        .font-block { width: 95%; max-width: 1000px; text-align: center; border-bottom: 1px solid #333; padding-bottom: 15px; }
-        .font-block p { margin: 5px 0 8px 0; font-size: 0.85em; color: #888; font-family: inherit; }
-        .font-placeholder { width: 95%; max-width: 1000px; border: 1px dashed #333; background-color: #222; display: flex; align-items: center; justify-content: center; color: #555; font-size: 0.8em; text-align: center; border-bottom: 1px solid #333; padding-bottom: 15px; box-sizing: border-box; font-family: inherit; }
-        /* Use ::before to prevent text selection issues */
-        .font-placeholder::before { content: attr(data-placeholder-text); }
-        .error { color: #ff6b6b; }
-        footer { padding: 8px 15px; text-align: center; font-size: 0.75em; color: #666; border-top: 1px solid #333; flex-shrink: 0; }
-        footer a { color: #88a; text-decoration: none; } footer a:hover { text-decoration: underline; }
+
+        .font-block {
+            width: 95%;
+            max-width: 1000px; /* Max width for readability */
+            text-align: center;
+            border-bottom: 1px solid #333;
+            padding-bottom: 20px; /* Increased padding */
+        }
+
+        .font-block p { /* Label for each font block */
+            margin: 8px 0 10px 0; /* Adjusted margins */
+            font-size: 0.9em; /* Slightly larger font label */
+            color: #999;
+            font-family: inherit;
+        }
+
+        .font-placeholder {
+            width: 95%;
+            max-width: 1000px;
+            border: 1px dashed #333;
+            background-color: #222;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #555;
+            font-size: 0.85em; /* Slightly larger placeholder text */
+            text-align: center;
+            border-bottom: 1px solid #333; /* Consistent with font-block */
+            padding-bottom: 15px; /* Consistent with font-block */
+            box-sizing: border-box;
+            font-family: inherit;
+            min-height: 80px; /* Ensure placeholder has some minimum height */
+            border-radius: 3px; /* Rounding for placeholder */
+        }
+
+        /* Use ::before for placeholder text to prevent selection interference */
+        .font-placeholder::before {
+            content: attr(data-placeholder-text);
+        }
+
+        .error { /* Style for error messages */
+            color: #ff6b6b;
+            font-weight: bold;
+        }
+
+        /* --- Footer --- */
+        footer {
+            padding: 10px 15px;
+            text-align: center;
+            font-size: 0.8em; /* Slightly larger footer text */
+            color: #777;
+            border-top: 1px solid #333;
+            flex-shrink: 0;
+        }
+
+        footer a {
+            color: #99b; /* Lighter link color */
+            text-decoration: none;
+        }
+
+        footer a:hover {
+            text-decoration: underline;
+        }
     </style>
     <script src="cp437font.js" defer></script>
     <script src="tdfRenderer.js" defer></script>
     <script type="module" defer>
-        // --- DOM Elements ---
+        // --- Constants ---
+        const SINGLE_FONT_BLOCK_ID = 'single-font-render-block';
+        const DEFAULT_MIN_SPACE_WIDTH = 3;
+        const CHAR_HEIGHT = 16; // From tdfRenderer.js, for placeholder height fallback
+        const DEBOUNCE_DELAY_MS = 300;
+        const TDF_BUNDLE_URL = 'tdf-fonts.bin';
+        const MAX_SCALED_CANVAS_DIMENSION = 10000; // Max width/height for scaled canvas
+
+        // --- DOM Element References ---
+        // Grouping DOM element selection for clarity and easy access.
         const elements = {
-             textInput: document.getElementById('text-input'), fontSelect: document.getElementById('font-select'),
-             showAllButton: document.getElementById('show-all-button'),
-             canvasContainer: document.getElementById('canvas-container'), statusDiv: document.getElementById('status'),
-             filterCharsCheckbox: document.getElementById('filter-chars'), randomOrderCheckbox: document.getElementById('random-order'),
-             minSpaceInput: document.getElementById('min-space'),
-             textAlignRadios: document.querySelectorAll('input[name="text-align"]'),
-             scaleSelect: document.getElementById('scale-factor') // Added scale selector
+            textInput: document.getElementById('text-input'),
+            fontSelect: document.getElementById('font-select'),
+            showAllButton: document.getElementById('show-all-button'),
+            canvasContainer: document.getElementById('canvas-container'),
+            statusDiv: document.getElementById('status'),
+            filterCharsCheckbox: document.getElementById('filter-chars'),
+            randomOrderCheckbox: document.getElementById('random-order'),
+            minSpaceInput: document.getElementById('min-space'),
+            textAlignRadios: document.querySelectorAll('input[name="text-align"]'),
+            scaleSelect: document.getElementById('scale-factor')
         };
 
-        // --- App State ---
-        let isReady = false;
-        let masterFontList = [];
-        let currentFilteredFontList = [];
-        let intersectionObserver = null;
-        const SINGLE_FONT_BLOCK_ID = 'single-font-render-block';
-        const CHAR_HEIGHT = 16; // Define locally if needed for placeholder height calculation fallback
+        // --- Application State ---
+        // Centralized state variables for managing the application's condition.
+        let isAppReady = false; // Tracks if tdfRenderer is initialized and fonts are loaded.
+        let masterFontList = []; // Complete list of fonts from the bundle.
+        let currentFilteredFontList = []; // Filtered list of fonts for display.
+        let intersectionObserver = null; // Observer for lazy-loading font canvases.
+        let textInputDebounceTimer = null; // Timer for debouncing text input.
 
         // --- Utility Functions ---
+
+        /**
+         * Sets the status message displayed to the user.
+         * @param {string} message - The message to display.
+         * @param {boolean} [isError=false] - True if the message indicates an error.
+         */
         function setStatus(message, isError = false) {
-            if (elements.statusDiv) { elements.statusDiv.textContent = message; elements.statusDiv.className = isError ? 'error' : ''; }
-            if (isError) console.error("Status:", message);
+            if (elements.statusDiv) {
+                elements.statusDiv.textContent = message;
+                elements.statusDiv.className = isError ? 'error' : '';
+            }
+            if (isError) {
+                console.error("Status Update (Error):", message);
+            } else {
+                console.log("Status Update:", message);
+            }
         }
+
+        /**
+         * Enables or disables UI controls based on application readiness.
+         * @param {boolean} enabled - True to enable controls, false to disable.
+         */
         function setControlsEnabled(enabled) {
-             elements.textInput.disabled = !enabled; elements.fontSelect.disabled = !enabled;
-             elements.showAllButton.disabled = !enabled; elements.filterCharsCheckbox.disabled = !enabled;
-             elements.randomOrderCheckbox.disabled = !enabled; elements.minSpaceInput.disabled = !enabled;
-             elements.textAlignRadios.forEach(r => r.disabled = !enabled);
-             elements.scaleSelect.disabled = !enabled; // Added scale selector enable/disable
-             isReady = enabled;
-         }
-        function getMinSpaceWidth() { const v=parseInt(elements.minSpaceInput.value,10); return isNaN(v)||v<0?3:v; } // Uses default 3
-        function shuffleArray(arr) { for(let i=arr.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [arr[i],arr[j]]=[arr[j],arr[i]]; } return arr; }
-        function getSelectedTextAlign() { return document.querySelector('input[name="text-align"]:checked')?.value || 'left'; }
+            elements.textInput.disabled = !enabled;
+            elements.fontSelect.disabled = !enabled;
+            elements.showAllButton.disabled = !enabled;
+            elements.filterCharsCheckbox.disabled = !enabled;
+            elements.randomOrderCheckbox.disabled = !enabled;
+            elements.minSpaceInput.disabled = !enabled;
+            elements.textAlignRadios.forEach(radio => radio.disabled = !enabled);
+            elements.scaleSelect.disabled = !enabled;
+            isAppReady = enabled;
+        }
+
+        /**
+         * Gets the minimum space width from the input field.
+         * @returns {number} The minimum space width in character units.
+         */
+        function getMinSpaceWidth() {
+            const value = parseInt(elements.minSpaceInput.value, 10);
+            return isNaN(value) || value < 0 ? DEFAULT_MIN_SPACE_WIDTH : value;
+        }
+
+        /**
+         * Shuffles an array in place using the Fisher-Yates algorithm.
+         * @param {Array<any>} array - The array to shuffle.
+         * @returns {Array<any>} The shuffled array.
+         */
+        function shuffleArray(array) {
+            for (let i = array.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [array[i], array[j]] = [array[j], array[i]];
+            }
+            return array;
+        }
+
+        /**
+         * Gets the selected text alignment value.
+         * @returns {string} The selected alignment ('left', 'center', or 'right').
+         */
+        function getSelectedTextAlign() {
+            const selectedRadio = document.querySelector('input[name="text-align"]:checked');
+            return selectedRadio ? selectedRadio.value : 'left';
+        }
+
+        /**
+         * Gets the selected canvas scaling factor.
+         * @returns {number} The scaling factor (e.g., 1, 2, 3).
+         */
         function getScaleFactor() {
             const scale = parseInt(elements.scaleSelect.value, 10);
             return isNaN(scale) || scale <= 0 ? 1 : scale;
         }
 
-        /** Applies scaling to a canvas using nearest-neighbor interpolation */
+        /**
+         * Scales a canvas using nearest-neighbor interpolation for a pixelated effect.
+         * @param {HTMLCanvasElement} baseCanvas - The original canvas to scale.
+         * @param {number} scaleFactor - The factor by which to scale the canvas.
+         * @returns {HTMLCanvasElement} The new scaled canvas, or the original if scaling is not applied.
+         */
         function scaleCanvas(baseCanvas, scaleFactor) {
             if (!baseCanvas || scaleFactor <= 1) {
-                return baseCanvas; // Return original if no scaling needed or invalid input
+                return baseCanvas; // No scaling needed or invalid input.
             }
+
             const scaledWidth = baseCanvas.width * scaleFactor;
             const scaledHeight = baseCanvas.height * scaleFactor;
 
-            // Prevent creating excessively large canvases
-            if (scaledWidth > 10000 || scaledHeight > 10000) {
-                console.warn(`Scaling aborted: Resulting canvas size (${scaledWidth}x${scaledHeight}) is too large.`);
-                return baseCanvas;
+            // Prevent creating excessively large canvases to avoid performance issues or crashes.
+            if (scaledWidth > MAX_SCALED_CANVAS_DIMENSION || scaledHeight > MAX_SCALED_CANVAS_DIMENSION) {
+                console.warn(`Scaling aborted: Resulting canvas size (${scaledWidth}x${scaledHeight}) exceeds maximum allowed dimension of ${MAX_SCALED_CANVAS_DIMENSION}px.`);
+                setStatus(`Scaling limited: Output too large. Displaying at 1x.`, true);
+                return baseCanvas; // Return original if scaled version is too big
             }
 
             const scaledCanvas = document.createElement('canvas');
@@ -118,272 +374,484 @@
             scaledCanvas.height = scaledHeight;
 
             const ctx = scaledCanvas.getContext('2d');
-            if (!ctx) return baseCanvas; // Fallback if context fails
+            if (!ctx) {
+                console.error("Failed to get 2D context for scaled canvas.");
+                return baseCanvas; // Fallback if context creation fails.
+            }
 
-            // Disable smoothing for pixelated scaling (most important part)
+            // Disable image smoothing to maintain pixelated appearance.
             ctx.imageSmoothingEnabled = false;
-            // // Optional: Add vendor prefixes if needed for older browsers
+            // For cross-browser compatibility, though less critical with modern browsers:
             // ctx.mozImageSmoothingEnabled = false;
             // ctx.webkitImageSmoothingEnabled = false;
             // ctx.msImageSmoothingEnabled = false;
 
-            // Draw the base canvas onto the scaled canvas, letting the browser handle pixel replication
+            // Draw the original canvas onto the new, larger canvas.
+            // The browser handles pixel replication due to imageSmoothingEnabled=false.
             ctx.drawImage(baseCanvas, 0, 0, baseCanvas.width, baseCanvas.height, 0, 0, scaledWidth, scaledHeight);
 
             return scaledCanvas;
         }
 
-        // --- Core Functions ---
-        async function initialize() {
-            setStatus('Initializing...'); setControlsEnabled(false);
-            // Check external font data
+        // --- Core Application Logic ---
+
+        /**
+         * Initializes the tdfRenderer and populates the font list.
+         * This function is called once on page load.
+         */
+        async function initializeApplication() {
+            setStatus('Initializing renderer...');
+            setControlsEnabled(false);
+
+            // Check for cp437font data, with a small delay for script loading.
             if (typeof globalThis.cp437font === 'undefined') {
-                 await new Promise(resolve => setTimeout(resolve, 50)); // Short delay for script loading
-                 if (typeof globalThis.cp437font === 'undefined') { setStatus('Error: cp437font data missing.', true); return; }
+                await new Promise(resolve => setTimeout(resolve, 50));
+                if (typeof globalThis.cp437font === 'undefined') {
+                    setStatus('Critical Error: cp437font data is missing. Please ensure cp437font.js is loaded.', true);
+                    return;
+                }
             }
+
+            // Check for tdfRenderer, with a small delay.
             if (typeof tdfRenderer === 'undefined' || typeof tdfRenderer.init !== 'function') {
-                 await new Promise(resolve => setTimeout(resolve, 50)); // Short delay for script loading
-                 if (typeof tdfRenderer === 'undefined' || typeof tdfRenderer.init !== 'function') { setStatus('Error: tdfRenderer library not found or invalid.', true); return; }
+                await new Promise(resolve => setTimeout(resolve, 50));
+                if (typeof tdfRenderer === 'undefined' || typeof tdfRenderer.init !== 'function') {
+                    setStatus('Critical Error: tdfRenderer library not found or invalid. Please ensure tdfRenderer.js is loaded.', true);
+                    return;
+                }
             }
+
             try {
-                const bundleUrl = 'tdf-fonts.bin'; // Path to your font bundle
-                masterFontList = await tdfRenderer.init(bundleUrl);
-                if (masterFontList.length === 0) { setStatus('No fonts found in bundle.', true); return; }
-                updateFontDropdown(); setControlsEnabled(true);
-                setStatus(`Ready (${masterFontList.length} fonts).`);
-                await renderSingleFont(); // Render initial view
-            } catch (error) { setStatus(`Initialization failed: ${error.message}`, true); console.error(error); }
+                masterFontList = await tdfRenderer.init(TDF_BUNDLE_URL);
+                if (masterFontList.length === 0) {
+                    setStatus('No fonts found in the TDF bundle. Check bundle file and path.', true);
+                    return;
+                }
+
+                updateFontDropdown();
+                setControlsEnabled(true);
+                setStatus(`Ready. ${masterFontList.length} fonts loaded.`);
+                await renderSingleSelectedFont(); // Perform an initial render.
+
+            } catch (error) {
+                setStatus(`Initialization Failed: ${error.message}`, true);
+                console.error("Initialization error details:", error);
+            }
         }
 
-        /** Updates font dropdown based on filter/text */
+        /**
+         * Updates the font selection dropdown based on current filters and text.
+         */
         function updateFontDropdown() {
-            if (!isReady && masterFontList.length === 0) return;
-            const filterActive = elements.filterCharsCheckbox.checked; const text = elements.textInput.value;
-            // Use try-catch as filterFontsByText might interact with uninitialized renderer
+            if (!isAppReady && masterFontList.length === 0) {
+                 // Avoid running if not initialized, unless masterFontList is ready (first population)
+                return;
+            }
+
+            const filterIsActive = elements.filterCharsCheckbox.checked;
+            const currentText = elements.textInput.value;
+
             try {
-                currentFilteredFontList = filterActive && tdfRenderer.isInitialized() ? tdfRenderer.filterFontsByText(text) : masterFontList;
+                if (filterIsActive && tdfRenderer.isInitialized()) {
+                    currentFilteredFontList = tdfRenderer.filterFontsByText(currentText);
+                } else {
+                    currentFilteredFontList = [...masterFontList]; // Use a copy
+                }
             } catch (filterError) {
                 console.error("Error during font filtering:", filterError);
-                currentFilteredFontList = masterFontList; // Fallback
-                setStatus("Error filtering fonts.", true);
+                currentFilteredFontList = [...masterFontList]; // Fallback to full list
+                setStatus("Error occurred while filtering fonts. Displaying all.", true);
             }
 
-            const currentSelectedValue = elements.fontSelect.value; elements.fontSelect.innerHTML = '';
+            const previouslySelectedFont = elements.fontSelect.value;
+            elements.fontSelect.innerHTML = ''; // Clear existing options.
+
             if (currentFilteredFontList.length === 0) {
-                 const opt = document.createElement('option'); opt.value=""; opt.textContent=filterActive?"No matching fonts":"No fonts"; elements.fontSelect.appendChild(opt); elements.fontSelect.disabled = true;
+                const option = document.createElement('option');
+                option.value = "";
+                option.textContent = filterIsActive ? "No matching fonts" : "No fonts available";
+                elements.fontSelect.appendChild(option);
+                elements.fontSelect.disabled = true;
             } else {
-                 currentFilteredFontList.forEach(key => { const opt = document.createElement('option'); opt.value=key; opt.textContent=key.includes('_')?key.substring(key.indexOf('_')+1):key; elements.fontSelect.appendChild(opt); });
-                 // Try to preserve selection, otherwise select first
-                 if (currentFilteredFontList.includes(currentSelectedValue)) elements.fontSelect.value = currentSelectedValue;
-                 else if (currentFilteredFontList.length > 0) elements.fontSelect.value = currentFilteredFontList[0];
+                currentFilteredFontList.forEach(fontKey => {
+                    const option = document.createElement('option');
+                    option.value = fontKey;
+                    // Display a more user-friendly name if key contains an underscore.
+                    option.textContent = fontKey.includes('_') ? fontKey.substring(fontKey.indexOf('_') + 1) : fontKey;
+                    elements.fontSelect.appendChild(option);
+                });
 
-                 elements.fontSelect.disabled = false;
-            }
-            elements.showAllButton.disabled = currentFilteredFontList.length === 0;
-        }
-
-        /** Renders the currently selected font */
-        async function renderSingleFont() {
-            if (!isReady || !tdfRenderer.isInitialized()) return;
-            const text = elements.textInput.value; const key = elements.fontSelect.value;
-            const scaleFactor = getScaleFactor(); // Get scale factor
-
-            // Clear placeholder view if active
-            if (intersectionObserver) { intersectionObserver.disconnect(); intersectionObserver = null; elements.canvasContainer.innerHTML = ''; }
-            // Clear display if no text or font selected
-            if (!text || !key) {
-                 const block = document.getElementById(SINGLE_FONT_BLOCK_ID);
-                 if (block) block.remove();
-                 setStatus('Enter text and select a font.'); // Provide clearer feedback
-                 return;
-            }
-
-            setStatus(`Rendering ${key} (Scale: ${scaleFactor}x)...`);
-            try {
-                const options = { uniqueFontKey: key, text, textAlign: getSelectedTextAlign(), bgColor: [0,0,0,255], minSpaceWidth: getMinSpaceWidth() };
-                // Render base canvas at 1x
-                const result = await tdfRenderer.render(options);
-
-                // Scale the result canvas if needed
-                const finalCanvas = scaleCanvas(result.canvas, scaleFactor);
-
-                let block = document.getElementById(SINGLE_FONT_BLOCK_ID); let label, canvasDiv;
-                if (!block) { // Create block structure if it doesn't exist
-                    block = document.createElement('div'); block.className = 'font-block'; block.id = SINGLE_FONT_BLOCK_ID;
-                    label = document.createElement('p'); block.appendChild(label);
-                    canvasDiv = document.createElement('div'); block.appendChild(canvasDiv); // Container for canvas replacement
-                    elements.canvasContainer.appendChild(block);
-                } else { // Find existing elements
-                    label = block.querySelector('p');
-                    canvasDiv = block.querySelector('div:not(:has(p))') || block.appendChild(document.createElement('div')); // Ensure canvasDiv exists
+                // Attempt to re-select the previously selected font, or default to the first.
+                if (currentFilteredFontList.includes(previouslySelectedFont)) {
+                    elements.fontSelect.value = previouslySelectedFont;
+                } else if (currentFilteredFontList.length > 0) {
+                    elements.fontSelect.value = currentFilteredFontList[0];
                 }
-                if(label) label.textContent = `${key} (${scaleFactor}x)`; // Update label with scale
-                canvasDiv.innerHTML = ''; // Clear previous canvas content
-                canvasDiv.appendChild(finalCanvas); // Add new potentially scaled canvas
-                setStatus(`Rendered ${finalCanvas.width}x${finalCanvas.height}`);
-            } catch (error) {
-                 setStatus(`Rendering failed for ${key}: ${error.message}`, true); console.error(error);
-                 const block = document.getElementById(SINGLE_FONT_BLOCK_ID);
-                 if (block) {
-                     // Ensure label exists before setting text content
-                     let label = block.querySelector('p');
-                     if (!label) {
-                        label = document.createElement('p');
-                        block.prepend(label); // Add label at the beginning
-                     }
-                     label.textContent = `Render failed: ${key}`;
-                     label.className = 'error';
-                     // Clear any old canvas
-                     const canvasDiv = block.querySelector('div:not(:has(p))');
-                     if (canvasDiv) canvasDiv.innerHTML = '';
-                 }
+                elements.fontSelect.disabled = false;
+            }
+            // Ensure the "Show All" button state reflects the filtered list.
+            elements.showAllButton.disabled = currentFilteredFontList.length === 0 || !isAppReady;
+        }
+
+        /**
+         * Creates or updates the DOM structure for displaying a single rendered font.
+         * @param {string} fontKey - The key of the font being rendered.
+         * @param {HTMLCanvasElement} canvasElement - The canvas element to display.
+         * @param {number} scaleFactor - The current scale factor.
+         */
+        function displayRenderedCanvas(fontKey, canvasElement, scaleFactor) {
+            let fontBlock = document.getElementById(SINGLE_FONT_BLOCK_ID);
+            let labelElement, canvasContainerDiv;
+
+            if (!fontBlock) {
+                fontBlock = document.createElement('div');
+                fontBlock.className = 'font-block';
+                fontBlock.id = SINGLE_FONT_BLOCK_ID;
+
+                labelElement = document.createElement('p');
+                fontBlock.appendChild(labelElement);
+
+                canvasContainerDiv = document.createElement('div'); // Dedicated div for canvas
+                fontBlock.appendChild(canvasContainerDiv);
+
+                elements.canvasContainer.appendChild(fontBlock);
+            } else {
+                labelElement = fontBlock.querySelector('p');
+                canvasContainerDiv = fontBlock.querySelector('div:not(:has(p))'); // Get the div that's not the <p>
+                if (!canvasContainerDiv) { // Should not happen if structure is maintained
+                    canvasContainerDiv = document.createElement('div');
+                    fontBlock.appendChild(canvasContainerDiv);
+                }
+            }
+
+            if (labelElement) {
+                labelElement.textContent = `${fontKey} (Rendered at ${scaleFactor}x)`;
+                labelElement.className = ''; // Clear any error class
+            }
+
+            canvasContainerDiv.innerHTML = ''; // Clear previous canvas
+            canvasContainerDiv.appendChild(canvasElement);
+        }
+
+        /**
+         * Handles and displays rendering errors for the single font view.
+         * @param {string} fontKey - The key of the font that failed to render.
+         * @param {Error} error - The error object.
+         */
+        function handleSingleRenderError(fontKey, error) {
+            setStatus(`Rendering failed for ${fontKey}: ${error.message}`, true);
+            console.error(`Error rendering font "${fontKey}":`, error);
+
+            let fontBlock = document.getElementById(SINGLE_FONT_BLOCK_ID);
+            if (fontBlock) {
+                let labelElement = fontBlock.querySelector('p');
+                if (!labelElement) { // Ensure label exists
+                    labelElement = document.createElement('p');
+                    fontBlock.prepend(labelElement); // Add to the start of the block
+                }
+                labelElement.textContent = `Render failed for: ${fontKey}`;
+                labelElement.className = 'error';
+
+                // Clear any existing canvas from the container div
+                const canvasContainerDiv = fontBlock.querySelector('div:not(:has(p))');
+                if (canvasContainerDiv) {
+                    canvasContainerDiv.innerHTML = '';
+                }
             }
         }
 
-        /** Sets up IntersectionObserver for virtual rendering */
-        function setupIntersectionObserver() {
-             const options = { root: elements.canvasContainer, rootMargin: '0px 0px 300px 0px', threshold: 0.01 }; // Observe elements coming into view
-             intersectionObserver = new IntersectionObserver((entries, observer) => {
-                 entries.forEach(entry => {
-                     if (entry.isIntersecting) {
-                         const placeholder = entry.target; const fontKey = placeholder.dataset.fontKey;
-                         // Check if it's a placeholder and not already rendered/rendering
-                         if (fontKey && placeholder.classList.contains('font-placeholder') && !placeholder.dataset.rendered) {
-                              placeholder.dataset.rendered = 'true'; // Mark as rendering started
-                              placeholder.style.borderStyle = 'solid'; // Indicate loading
-                              renderFontInPlaceholder(placeholder, fontKey);
-                              // Keep observing until replaced, renderFontInPlaceholder replaces it
-                         }
-                     }
-                 });
-             }, options);
-         }
 
-         /** Renders a font and replaces its placeholder div */
-        async function renderFontInPlaceholder(placeholderElement, uniqueFontKey) {
-             const text = elements.textInput.value; if (!text) return; // Should not happen if called correctly, but safe check
-             const minSpaceWidth = getMinSpaceWidth(); const align = getSelectedTextAlign();
-             const scaleFactor = getScaleFactor(); // Get scale factor
+        /**
+         * Renders the font currently selected in the dropdown.
+         */
+        async function renderSingleSelectedFont() {
+            if (!isAppReady || !tdfRenderer.isInitialized()) {
+                setStatus('Renderer not ready. Please wait for initialization.', true);
+                return;
+            }
 
-             try {
-                 const opts = { uniqueFontKey:uniqueFontKey, text, textAlign:align, bgColor:[0,0,0,255], minSpaceWidth };
-                 // Render base canvas at 1x
-                 const result = await tdfRenderer.render(opts);
+            const textToRender = elements.textInput.value;
+            const selectedFontKey = elements.fontSelect.value;
+            const currentScaleFactor = getScaleFactor();
 
-                 // Scale the result canvas if needed
-                 const finalCanvas = scaleCanvas(result.canvas, scaleFactor);
+            // If in "Show All" mode, clear it first.
+            if (intersectionObserver) {
+                clearAllFontsView();
+            }
 
-                 const block = document.createElement('div'); block.className='font-block';
-                 const p = document.createElement('p'); p.textContent=`${uniqueFontKey} (${scaleFactor}x)`; // Update label
-                 block.appendChild(p); block.appendChild(finalCanvas); // Add potentially scaled canvas
+            if (!textToRender || !selectedFontKey) {
+                elements.canvasContainer.innerHTML = ''; // Clear canvas area
+                setStatus(textToRender ? 'Please select a font.' : 'Please enter text to render.');
+                return;
+            }
 
-                 // Unobserve *before* replacing to avoid potential race conditions or errors
-                 if (intersectionObserver) intersectionObserver.unobserve(placeholderElement);
-                 placeholderElement.replaceWith(block);
+            setStatus(`Rendering "${selectedFontKey}" at ${currentScaleFactor}x...`);
 
-             } catch (error) {
-                 console.error(`Placeholder render fail ${uniqueFontKey}:`, error);
-                 placeholderElement.textContent=`Error: ${uniqueFontKey}`; // Update placeholder text on error
-                 placeholderElement.classList.add('error');
-                 placeholderElement.style.borderStyle = 'solid'; // Keep border solid on error
-                 // Don't unobserve on error, maybe user scrolls away and back? Or maybe we should? Decide based on desired behavior. For now, leave it observed.
-             }
+            try {
+                const renderOptions = {
+                    uniqueFontKey: selectedFontKey,
+                    text: textToRender,
+                    textAlign: getSelectedTextAlign(),
+                    bgColor: [0, 0, 0, 255], // Opaque black background
+                    minSpaceWidth: getMinSpaceWidth()
+                };
+
+                // Render the base canvas at 1x scale.
+                const renderResult = await tdfRenderer.render(renderOptions);
+
+                // Scale the resulting canvas if the scale factor is greater than 1.
+                const finalCanvas = scaleCanvas(renderResult.canvas, currentScaleFactor);
+
+                displayRenderedCanvas(selectedFontKey, finalCanvas, currentScaleFactor);
+                setStatus(`Successfully rendered "${selectedFontKey}" at ${finalCanvas.width}x${finalCanvas.height}px.`);
+
+            } catch (error) {
+                handleSingleRenderError(selectedFontKey, error);
+            }
         }
 
-        /** Creates placeholders for all fonts to be displayed */
-        function displayAllFontsPlaceholders() {
-            if (!isReady || !tdfRenderer.isInitialized()) { setStatus('Not ready.', true); return; }
-            const text = elements.textInput.value; if (!text) { setStatus('Enter text to display all fonts.'); return; } // Clearer message
 
-            const filterActive = elements.filterCharsCheckbox.checked;
+        /**
+         * Sets up the IntersectionObserver for lazy-loading font canvases.
+         */
+        function initializeIntersectionObserver() {
+            if (intersectionObserver) {
+                intersectionObserver.disconnect(); // Disconnect any existing observer.
+            }
+
+            const observerOptions = {
+                root: elements.canvasContainer, // Viewport is the canvas container.
+                rootMargin: '0px 0px 300px 0px', // Trigger when placeholder is 300px from bottom.
+                threshold: 0.01 // Trigger when at least 1% of the placeholder is visible.
+            };
+
+            intersectionObserver = new IntersectionObserver((entries, observer) => {
+                entries.forEach(entry => {
+                    if (entry.isIntersecting) {
+                        const placeholder = entry.target;
+                        const fontKey = placeholder.dataset.fontKey;
+
+                        // Check if it's a placeholder and not already processed.
+                        if (fontKey && placeholder.classList.contains('font-placeholder') && !placeholder.dataset.rendered) {
+                            placeholder.dataset.rendered = 'true'; // Mark as processing.
+                            placeholder.style.borderStyle = 'solid'; // Visual feedback: loading.
+                            placeholder.dataset.placeholderText = `Loading ${fontKey}...`; // Update text
+
+                            renderFontInPlaceholder(placeholder, fontKey);
+                            // No need to unobserve here, it will be replaced or updated.
+                        }
+                    }
+                });
+            }, observerOptions);
+        }
+
+        /**
+         * Renders a specific font and replaces its placeholder div in the "Show All" view.
+         * @param {HTMLElement} placeholderElement - The placeholder div to replace.
+         * @param {string} uniqueFontKey - The key of the font to render.
+         */
+        async function renderFontInPlaceholder(placeholderElement, uniqueFontKey) {
+            const textToRender = elements.textInput.value;
+            if (!textToRender) { // Should ideally be caught earlier.
+                placeholderElement.textContent = `Error: No text for ${uniqueFontKey}`;
+                placeholderElement.classList.add('error');
+                return;
+            }
+
+            const currentScaleFactor = getScaleFactor();
+            const renderOptions = {
+                uniqueFontKey: uniqueFontKey,
+                text: textToRender,
+                textAlign: getSelectedTextAlign(),
+                bgColor: [0, 0, 0, 255],
+                minSpaceWidth: getMinSpaceWidth()
+            };
+
+            try {
+                // Render base canvas at 1x.
+                const result = await tdfRenderer.render(renderOptions);
+                // Scale if necessary.
+                const finalCanvas = scaleCanvas(result.canvas, currentScaleFactor);
+
+                const fontBlock = document.createElement('div');
+                fontBlock.className = 'font-block';
+
+                const label = document.createElement('p');
+                label.textContent = `${uniqueFontKey} (${currentScaleFactor}x)`;
+                fontBlock.appendChild(label);
+                fontBlock.appendChild(finalCanvas);
+
+                // Important: Unobserve before replacing to prevent issues.
+                if (intersectionObserver) {
+                    intersectionObserver.unobserve(placeholderElement);
+                }
+                placeholderElement.replaceWith(fontBlock);
+
+            } catch (error) {
+                console.error(`Placeholder render failed for ${uniqueFontKey}:`, error);
+                placeholderElement.dataset.placeholderText = `Error: ${uniqueFontKey}`; // Update text on error
+                placeholderElement.classList.add('error');
+                placeholderElement.style.borderStyle = 'solid'; // Keep solid border on error
+                // Optionally, re-observe or leave it if you want retry logic on scroll.
+                // For now, it remains unobserved after an attempt.
+            }
+        }
+
+        /**
+         * Clears the "Show All" fonts view and disconnects the IntersectionObserver.
+         */
+        function clearAllFontsView() {
+            if (intersectionObserver) {
+                intersectionObserver.disconnect();
+                intersectionObserver = null;
+            }
+            elements.canvasContainer.innerHTML = ''; // Clear all content
+        }
+
+
+        /**
+         * Creates and displays placeholders for all fonts in the "Show All" mode.
+         * Sets up IntersectionObserver to lazy-load actual canvases.
+         */
+        function displayAllFontsAsPlaceholders() {
+            if (!isAppReady || !tdfRenderer.isInitialized()) {
+                setStatus('Renderer not ready. Cannot display all fonts.', true);
+                return;
+            }
+
+            const textToRender = elements.textInput.value;
+            if (!textToRender) {
+                setStatus('Please enter text before showing all fonts.');
+                clearAllFontsView(); // Clear if previously shown
+                return;
+            }
+
+            const filterIsActive = elements.filterCharsCheckbox.checked;
             const useRandomOrder = elements.randomOrderCheckbox.checked;
             let fontsToDisplay;
+
             try {
-                 fontsToDisplay = filterActive ? tdfRenderer.filterFontsByText(text) : [...masterFontList];
-            } catch(filterError) {
-                 console.error("Error during font filtering for Show All:", filterError);
-                 setStatus("Error filtering fonts.", true);
-                 return; // Stop if filtering fails
+                fontsToDisplay = filterIsActive ? tdfRenderer.filterFontsByText(textToRender) : [...masterFontList];
+            } catch (filterError) {
+                console.error("Error during font filtering for 'Show All':", filterError);
+                setStatus("Error filtering fonts. Cannot display all.", true);
+                return;
             }
 
-            if (fontsToDisplay.length === 0) { setStatus(filterActive ? "No fonts match the required characters." : "No fonts available in bundle.", true); return; } // Clearer message
-            if (useRandomOrder) { shuffleArray(fontsToDisplay); }
+            if (fontsToDisplay.length === 0) {
+                setStatus(filterIsActive ? "No fonts match the required characters." : "No fonts available in the bundle.", true);
+                clearAllFontsView();
+                return;
+            }
 
-            const scaleFactor = getScaleFactor(); // Get scale factor for placeholder height
+            if (useRandomOrder) {
+                shuffleArray(fontsToDisplay);
+            }
 
-            setStatus(`Showing ${fontsToDisplay.length} fonts (Scale: ${scaleFactor}x, scroll to render)...`);
-            setControlsEnabled(false); // Disable controls during potentially long setup
-            elements.canvasContainer.innerHTML = ''; // Clear container
+            const currentScaleFactor = getScaleFactor();
+            setStatus(`Preparing ${fontsToDisplay.length} fonts (Scale: ${currentScaleFactor}x). Scroll to render...`);
+            setControlsEnabled(false); // Disable controls during intensive setup.
+            clearAllFontsView(); // Clear previous content and observer.
+            initializeIntersectionObserver(); // Setup new observer.
 
-            if (intersectionObserver) intersectionObserver.disconnect(); // Disconnect old one if exists
-            setupIntersectionObserver(); // Create new observer instance
+            const minSpace = getMinSpaceWidth();
+            const fragment = document.createDocumentFragment(); // Use a fragment for performance.
 
-            const minSpaceWidth = getMinSpaceWidth();
-
-            // Batch placeholder creation using DocumentFragment
-            const fragment = document.createDocumentFragment();
-            fontsToDisplay.forEach(uniqueFontKey => {
-                let estimatedHeight = CHAR_HEIGHT * scaleFactor; // Default scaled height
+            fontsToDisplay.forEach(fontKey => {
+                let estimatedHeight = CHAR_HEIGHT * currentScaleFactor; // Default scaled height.
                 try {
-                    // Calculate base layout (1x)
-                    const layout = tdfRenderer.calculateLayout(uniqueFontKey, text, minSpaceWidth);
-                    // Estimate scaled height for placeholder
+                    // Calculate base layout (1x) for height estimation.
+                    const layout = tdfRenderer.calculateLayout(fontKey, textToRender, minSpace);
                     if (layout && layout.height > 0) {
-                        estimatedHeight = layout.height * scaleFactor;
+                        estimatedHeight = layout.height * currentScaleFactor;
                     }
-                } catch(layoutError) {
-                    console.warn(`Could not calculate layout for ${uniqueFontKey}:`, layoutError);
-                    // Use default height if layout fails
+                } catch (layoutError) {
+                    console.warn(`Could not calculate layout for placeholder ${fontKey}:`, layoutError);
+                    // Fallback to default CHAR_HEIGHT based estimation.
                 }
 
                 const placeholder = document.createElement('div');
                 placeholder.className = 'font-placeholder';
-                placeholder.dataset.fontKey = uniqueFontKey;
-                // Use data attribute for text to avoid selection issues
-                placeholder.dataset.placeholderText = `${uniqueFontKey} (${scaleFactor}x)`;
-                // Add padding/margins to estimated height for label space etc.
-                placeholder.style.height = `${Math.max(estimatedHeight + 40, 60)}px`; // Ensure min height
+                placeholder.dataset.fontKey = fontKey;
+                placeholder.dataset.placeholderText = `${fontKey} (${currentScaleFactor}x, scroll to load)`;
+                // Add padding/margins to estimated height for label and spacing.
+                // Ensure a minimum practical height for the placeholder.
+                placeholder.style.height = `${Math.max(estimatedHeight + 40, 80)}px`;
                 fragment.appendChild(placeholder);
-                intersectionObserver.observe(placeholder); // Observe each placeholder
+                intersectionObserver.observe(placeholder);
             });
-            elements.canvasContainer.appendChild(fragment); // Append all placeholders at once
 
-            setControlsEnabled(true); // Re-enable controls
+            elements.canvasContainer.appendChild(fragment); // Append all placeholders at once.
+            setControlsEnabled(true); // Re-enable controls.
         }
 
-        // --- Event Listeners ---
-        elements.showAllButton.addEventListener('click', displayAllFontsPlaceholders);
-        elements.filterCharsCheckbox.addEventListener('change', () => { updateFontDropdown(); renderSingleFont(); });
-        elements.randomOrderCheckbox.addEventListener('change', () => {/* Affects next "Show All", no immediate action */});
-        elements.minSpaceInput.addEventListener('change', renderSingleFont);
-        elements.fontSelect.addEventListener('change', renderSingleFont);
-        elements.textAlignRadios.forEach(radio => radio.addEventListener('change', renderSingleFont));
-        elements.scaleSelect.addEventListener('change', () => { // Added listener for scale change
-            // If showing all fonts (observer is active), re-trigger placeholder display to get correct heights and labels
-            if (intersectionObserver) {
-                displayAllFontsPlaceholders();
-            } else {
-                renderSingleFont(); // Otherwise just re-render the single view
-            }
-        });
 
-        let debounceTimer;
-        elements.textInput.addEventListener('input', () => {
-            clearTimeout(debounceTimer);
-            updateFontDropdown(); // Update dropdown immediately on input
-            // Debounce the potentially slower rendering
-            debounceTimer = setTimeout(() => {
-                // Only render if not in "Show All" mode
-                if (!intersectionObserver) {
-                    renderSingleFont();
+        // --- Event Listener Setup ---
+
+        /**
+         * Attaches all necessary event listeners to the DOM elements.
+         */
+        function attachEventListeners() {
+            elements.showAllButton.addEventListener('click', displayAllFontsAsPlaceholders);
+
+            elements.filterCharsCheckbox.addEventListener('change', () => {
+                updateFontDropdown();
+                if (!intersectionObserver) { // Only re-render single if not in "show all"
+                    renderSingleSelectedFont();
                 }
-                // If in "Show All" mode, changing text requires redisplaying placeholders
-                // but maybe wait for user to click "Show All" again? For now, do nothing automatically.
-            }, 300);
-        });
+            });
 
-        // --- Initial Load ---
-        initialize();
+            // randomOrderCheckbox only affects the next "Show All" click, no immediate re-render.
+            elements.randomOrderCheckbox.addEventListener('change', () => { /* No immediate action */ });
+
+            elements.minSpaceInput.addEventListener('change', () => {
+                 if (!intersectionObserver) renderSingleSelectedFont();
+                 // If in "Show All", this change will apply to newly scrolled items.
+                 // Or, user can click "Show All" again to re-generate all placeholders with new value.
+            });
+
+            elements.fontSelect.addEventListener('change', renderSingleSelectedFont);
+
+            elements.textAlignRadios.forEach(radio => {
+                radio.addEventListener('change', () => {
+                    if (!intersectionObserver) renderSingleSelectedFont();
+                    // Similar to minSpace, affects new items in "Show All" or requires re-trigger.
+                });
+            });
+
+            elements.scaleSelect.addEventListener('change', () => {
+                if (intersectionObserver) {
+                    // If showing all fonts, re-trigger placeholder display to update heights and labels.
+                    displayAllFontsAsPlaceholders();
+                } else {
+                    renderSingleSelectedFont(); // Otherwise, just re-render the single view.
+                }
+            });
+
+            elements.textInput.addEventListener('input', () => {
+                clearTimeout(textInputDebounceTimer);
+                updateFontDropdown(); // Update dropdown immediately for responsiveness.
+
+                // Debounce rendering, which is more resource-intensive.
+                textInputDebounceTimer = setTimeout(() => {
+                    if (!intersectionObserver) {
+                        // Only auto-render single view if not in "Show All" mode.
+                        renderSingleSelectedFont();
+                    }
+                    // In "Show All" mode, text changes invalidate current placeholders.
+                    // User should ideally click "Show All Fonts" again to refresh.
+                    // Or, we could provide a "Refresh All" button.
+                    // For now, no automatic re-render of "Show All" on text input.
+                }, DEBOUNCE_DELAY_MS);
+            });
+        }
+
+        // --- Initial Page Load ---
+        // Start the application once the DOM is ready.
+        document.addEventListener('DOMContentLoaded', () => {
+            attachEventListeners();
+            initializeApplication();
+        });
 
     </script>
 </head>
@@ -391,43 +859,54 @@
     <header class="controls">
         <textarea id="text-input" placeholder="Enter text..." title="Text to Render">ANSI LIVES</textarea>
         <select id="font-select" title="Select Font" disabled>
-            <option value="">Loading...</option>
+            <option value="">Loading fonts...</option>
         </select>
         <button id="show-all-button" disabled title="Display All Fonts (Renders on Scroll)">Show All Fonts</button>
-         <div class="option-group">
-             <input type="checkbox" id="filter-chars" title="Only show fonts that include every character in the input text (excluding space)" disabled><label for="filter-chars">Require Chars</label>
+
+        <div class="option-group">
+            <input type="checkbox" id="filter-chars" title="Only show fonts that include every character in the input text (excluding space)" disabled>
+            <label for="filter-chars">Require Chars</label>
         </div>
-         <div class="option-group">
-             <input type="checkbox" id="random-order" title="Display 'Show All' list in random order" disabled><label for="random-order">Random</label>
+
+        <div class="option-group">
+            <input type="checkbox" id="random-order" title="Display 'Show All' list in random order" disabled>
+            <label for="random-order">Random</label>
         </div>
-         <div class="option-group">
-            <label for="min-space">Space:</label><input type="number" id="min-space" value="3" min="0" max="10" title="Min width (chars) for fonts missing space glyph" disabled>
-         </div>
-         <div class="option-group">
-              <label>Align:</label>
-              <input type="radio" name="text-align" id="align-left" value="left" checked title="Align text left" disabled><label for="align-left">Left</label>
-              <input type="radio" name="text-align" id="align-center" value="center" title="Align text center" disabled><label for="align-center">Center</label>
-              <input type="radio" name="text-align" id="align-right" value="right" title="Align text right" disabled><label for="align-right">Right</label>
-         </div>
-         <div class="option-group">
-             <label for="scale-factor">Scale:</label>
-             <select id="scale-factor" title="Scale output size" disabled>
-                 <option value="1" selected>1x</option>
-                 <option value="2">2x</option>
-                 <option value="3">3x</option>
-                 <option value="4">4x</option>
-                 <option value="5">5x</option>
-             </select>
-         </div>
+
+        <div class="option-group">
+            <label for="min-space">Space:</label>
+            <input type="number" id="min-space" value="3" min="0" max="10" title="Minimum width (in character cells) for fonts that don't define a space glyph" disabled>
+        </div>
+
+        <div class="option-group">
+             <label>Align:</label>
+             <input type="radio" name="text-align" id="align-left" value="left" checked title="Align text left" disabled><label for="align-left">Left</label>
+             <input type="radio" name="text-align" id="align-center" value="center" title="Align text center" disabled><label for="align-center">Center</label>
+             <input type="radio" name="text-align" id="align-right" value="right" title="Align text right" disabled><label for="align-right">Right</label>
+        </div>
+
+        <div class="option-group">
+            <label for="scale-factor">Scale:</label>
+            <select id="scale-factor" title="Scale output size (e.g., 2x = double size)" disabled>
+                <option value="1" selected>1x (Original)</option>
+                <option value="2">2x</option>
+                <option value="3">3x</option>
+                <option value="4">4x</option>
+                <option value="5">5x</option>
+            </select>
+        </div>
     </header>
+
     <main>
-        <div id="status">Loading script...</div>
+        <div id="status">Loading script dependencies...</div>
         <div id="canvas-container">
             </div>
     </main>
+
     <footer>
-        TDF Figlet | <a href="https://github.com/atdt/tdf-figlet" target="_blank" rel="noopener noreferrer">GitHub</a>
-        | Uses <a href="https://www.roysac.com/thedrawfonts-tdf.html" target="_blank" rel="noopener noreferrer">TDF</a> fonts.
+        TDF Figlet Designer |
+        <a href="https://github.com/atdt/tdf-figlet" target="_blank" rel="noopener noreferrer">View on GitHub</a> |
+        Uses <a href="https://www.roysac.com/thedrawfonts-tdf.html" target="_blank" rel="noopener noreferrer">TheDraw Fonts (TDF)</a>.
     </footer>
 </body>
 </html>
