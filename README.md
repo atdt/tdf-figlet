@@ -1,6 +1,6 @@
 # TDF Figlet - TheDraw Font Renderer Web App
 
-This repository contains a simple web application (`index.html`) that lets you render text using classic TheDraw `.TDF` Color fonts, much like the command-line `figlet` tool does for its own font format.
+This repository contains a simple web application that lets you render text using classic TheDraw `.TDF` Color fonts, much like the command-line `figlet` tool does for its own font format.
 
 It uses an underlying JavaScript library (`tdfRenderer.js`) to handle the font loading and canvas rendering from a preprocessed binary font bundle.
 
@@ -56,45 +56,6 @@ After completing the setup:
 4.  Select a font from the dropdown.
 5.  Use the checkboxes and number input to control filtering, random order (for "Show All"), minimum space width, and text alignment.
 6.  Click "Show All Fonts" to view the text rendered in all applicable fonts (scroll down to render them as they enter the viewport).
-
-## Binary Bundle Format (`tdf-fonts.bin`)
-
-The `tdfPacker.js` script generates a binary file containing all necessary data extracted from the TDF Color fonts. The format is structured as follows (all multi-byte values are Little Endian):
-
-1.  **Header** (21 Bytes Total)
-    * Magic String: `TDFB` (4 bytes ASCII)
-    * Format Version: `1` (1 byte Uint8)
-    * Font Count (N): Total number of fonts included (4 bytes Uint32LE)
-    * Font Index Offset: Byte offset from start of file to the Font Index Table (4 bytes Uint32LE)
-    * String Pool Offset: Byte offset from start of file to the String Pool (4 bytes Uint32LE)
-    * Font Data Pool Offset: Byte offset from start of file to the Font Data Pool (4 bytes Uint32LE)
-
-2.  **Font Index Table** (Starts at `Font Index Offset`, Size = N * 8 bytes)
-    * Contains `N` entries, sorted alphabetically by the font's unique key.
-    * Each entry (8 bytes):
-        * Unique Key String Offset: Offset within the String Pool where the null-terminated font key string begins (4 bytes Uint32LE).
-        * Font Data Offset: Offset within the Font Data Pool where this font's specific data block begins (4 bytes Uint32LE).
-
-3.  **String Pool** (Starts at `String Pool Offset`, Variable Size)
-    * A sequence of all unique font keys (generated as `FILENAME_FontName`), each terminated by a null byte (`\0`). Stored as UTF-8.
-
-4.  **Font Data Pool** (Starts at `Font Data Pool Offset`, Variable Size)
-    * Concatenated data blocks for each font, ordered corresponding to the Font Index Table.
-    * **Font Data Block** (Variable Size):
-        * Spacing: Letter spacing value (1 byte Uint8).
-        * Glyph Count (G): Number of defined glyphs for this font (1 byte Uint8, max 94).
-        * **Glyph Lookup Table** (Size = G * 3 bytes): Contains `G` entries, sorted by character code.
-            * Entry (3 bytes):
-                * Char Code: ASCII code (33-126) of the glyph (1 byte Uint8).
-                * Glyph Data Offset: Offset within *this font's* subsequent Glyph Data Table where the specific glyph's data begins (2 bytes Uint16LE).
-        * **Glyph Data Table (GDT)** (Variable Size): Concatenated data for all `G` glyphs.
-            * Glyph Data (Variable Size):
-                * Width: Glyph width in character cells (1 byte Uint8).
-                * Height: Calculated actual glyph height in lines (1 byte Uint8).
-                * Byte Stream: Sequence of bytes representing the glyph cells.
-                    * `CharCode` (1 byte Uint8), `AttrByte` (1 byte Uint8): For a standard character cell.
-                    * `0x0D` (1 byte): Represents a newline within the glyph.
-                    * `0x00` (1 byte): Null terminator, marks the end of this glyph's byte stream.
 
 ## Related Links
 
