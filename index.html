@@ -518,7 +518,7 @@
             const useRandomOrder = elements.randomOrderCheckbox.checked;
             let fontsToDisplay;
             try {
-                fontsToDisplay = filterIsActive ? tdfRenderer.filterFontsByText(textToRende_r) : [...masterFontList];
+                fontsToDisplay = filterIsActive ? tdfRenderer.filterFontsByText(textToRender) : [...masterFontList];
             } catch (filterError) {
                 console.error("Error filtering for 'Show All':", filterError);
                 setStatus("Error filtering fonts.", true); return;
