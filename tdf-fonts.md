@@ -1,7 +1,7 @@
-### TDF Font Bundle Specification v4.0 (Standalone)
+### TDF Font Bundle Specification v6 (Standalone)
 
-**Document Version:** 1.0
-**Bundle Format Version:** 4.0
+**Document Version:** 3.0
+**Bundle Format Version:** 6
 
 **Purpose:** This document specifies a binary file format for bundling multiple TheDraw Font (TDF) color font files. The primary goals are to achieve a compact representation suitable for efficient delivery over the web (especially after GZip compression) and to allow for reasonably fast client-side parsing and rendering.
 
@@ -23,90 +23,105 @@ For "color" TDFs, which are the focus of this specification:
 
 Web applications requiring access to a large library of TDF fonts (e.g., hundreds or thousands) face challenges with fetching numerous small individual files due to HTTP overhead and latency. A common solution is to preprocess these files into a single binary bundle. This bundle must then be compressed (typically with GZip by the web server) for efficient transmission to the client. The client-side application then parses this bundle to access font data.
 
-**0.3. Design Rationale for Bundle Format v4.0:**
+**0.3. Design Rationale for Bundle Format v6:**
 
-This specification (v4.0) is the result of analyzing the statistical properties of a large TDF color font collection and incorporating expert advice on data compression. Key observations and motivations include:
+The bundle is served uncompressed and compressed in transit by the web server with gzip. Gzip finds repeated byte sequences only within the preceding 32 KiB, and then entropy-codes what remains. The format therefore aims to put similar bytes close together and to make the same structure produce the same bytes, rather than to minimize the uncompressed size. Measured on the 3,541 color fonts of Roy/SAC's TDF collection:
 
-* **Implicit Glyph Structure:** Analysis of TDF files revealed that the vast majority of glyphs (over 97% in a sample collection) already fill their declared width on every line containing content. This means glyphs can largely be treated as dense rectangular blocks. The v4.0 format leverages this by removing explicit newline and end-of-glyph markers from the encoded cell stream. The encoder implicitly pads the few "ragged" lines (lines shorter than the glyph's declared width) with a designated "transparent" cell representation. This simplifies the stream structure and reduces the number of non-data marker bytes.
-* **Local Palette of (Character, Attribute) Pairs:**
-    * Statistical analysis showed that individual fonts typically use a small number of unique Character Codes (average ~10) and an even smaller number of unique Color Attributes (average ~7).
-    * Instead of separate palettes for characters and attributes, this format uses a single local palette per font consisting of unique *(Character Code, Color Attribute)* **pairs**.
-    * If the number of unique pairs in a font is low (often <= 64, and constrained to be <= 254 for this format), each 2-byte cell from the original TDF can be mapped to a single, smaller index (typically 1 byte) into this local pair palette. This significantly reduces the raw size of the cell data stream.
-* **Run-Length Encoding (RLE):**
-    * TDF glyphs often contain sequences of identical cells (e.g., spaces, solid blocks of the same character and color).
-    * Applying a simple RLE scheme to the stream of *pair palette indices* can efficiently compress these runs. A reserved index value (`0xFF`) is used as an escape code for RLE sequences.
-* **Deterministic Sorting for Consistency:**
-    * For simplicity and deterministic bundle generation, fonts within the bundle are sorted alphabetically by their `uniqueKey`. This ensures that if the input TDF files are the same, the output bundle is byte-for-byte identical. Previous experiments with content-aware sorting did not yield consistent GZip improvements for this dataset.
-* **Optimized for GZip:** The entire scheme is designed to produce an intermediate binary format that is more amenable to subsequent GZip compression. By reducing raw data size, simplifying stream structure, and encoding common patterns (like runs), GZip can often achieve better final compression ratios.
-* **Decoder Simplicity:** The design aims to keep the client-side decoding logic reasonably simple and efficient.
+| Version | Uncompressed | `gzip -6` | `brotli -q 11` |
+| :------ | -----------: | --------: | -------------: |
+| v4      | 15,297,139   | 1,836,447 | 1,276,944      |
+| v6      | 5,800,438    | 963,995   | 758,322        |
+
+
+* **Implicit glyph structure.** Most glyphs fill their declared width on every line, so each glyph is stored as a dense `width × height` grid. The encoder pads short lines with a padding pair (see below) and truncates lines longer than the declared width.
+* **Local pair palette, ordered by frequency.** Each font has a palette of the distinct (character, attribute) pairs its glyphs use, and each cell is stored as a one-byte index into it. The palette is ordered by descending frequency, so index 0 is usually the font's background cell and low indices are the font's common cells. Two fonts that differ only in color then produce the same index streams, and gzip can match one against the other. (v4 ordered the palette by character code, which gives the same shape different indices in different fonts.)
+* **No run-length encoding.** Gzip encodes runs itself. RLE escape sequences break up the index streams that would otherwise match between fonts. Without RLE, a glyph's size is `width × height`, so the format needs no per-glyph offsets.
+* **Metadata separated from cell data.** All palettes and glyph dimensions come first, followed by all cells. Each region then has uniform statistics.
+* **One record per distinct font.** About 3% of the collection's fonts are byte-for-byte duplicates under different names. Each distinct font is stored once as a *record*, and the font index maps every name to its record.
+* **Base records ordered by shape.** Alphabetical order scatters related designs beyond gzip's window. Base records are sorted by the character codes (ignoring attributes) of the glyphs `A`, `a`, `H` and `O`, so related designs sort together.
+* **Derived fonts.** Many fonts are released in several color schemes, or swap one shading character for another, while keeping the same glyph shapes. Such a font has the same index streams as some other font, read through a different palette. The 3,421 distinct fonts in the collection reduce to 1,121 *base* records, which store cells, and 2,300 *derived* records, which store only a palette. A derived palette is encoded relative to its base palette, as an attribute substitution plus a list of entries the substitution gets wrong; most derived records need no such entries.
+* **Shared glyphs.** A glyph whose dimensions and index stream equal those of the same character in the preceding base record is stored as a flag rather than as cells. The two glyphs may still render differently, because each record maps the indices through its own palette.
+* **Determinism.** Given the same input files, the encoder produces a byte-identical bundle.
+
+Alternatives that were measured and rejected: storing raw (character, attribute) pairs instead of palette indices; storing the character and attribute planes as separate streams; column-major cell order; glyph-level deduplication or recoloring with explicit references (the references cost more than the compressor's own matches); and adaptive context-model (PPM) coders over the cells using the neighboring cells and the most similar earlier glyph as context, which compressed glyph shapes worse than brotli does.
 
 ---
 
 ### I. File Format Structure
 
+All multi-byte integers are little-endian.
+
 **1. Overall Bundle Structure:**
 
-The bundle consists of the following sections in order:
+The bundle consists of the following sections in order, with no padding between them:
 
-1.  **Main Bundle Header**
-2.  **Font Index Table**
-3.  **String Pool**
-4.  **Font Data Pool**
+1.  **Header**
+2.  **Font Index**
+3.  **Base Record Table**
+4.  **Derived Record Table**
+5.  **Cell Pool**
 
-**2. Main Bundle Header (21 bytes total):**
+**2. Header (17 bytes):**
 
-| Offset | Length (bytes) | Type       | Description                                      |
-| :----- | :------------- | :--------- | :----------------------------------------------- |
-| 0      | 4              | ASCII      | Magic String: "TDFB"                             |
-| 4      | 1              | `Uint8`    | Bundle Version: `4`                              |
-| 5      | 4              | `Uint32LE` | Font Count (N): Number of fonts in the bundle.   |
-| 9      | 4              | `Uint32LE` | Font Index Table Offset (absolute from file start) |
-| 13     | 4              | `Uint32LE` | String Pool Offset (absolute from file start)    |
-| 17     | 4              | `Uint32LE` | Font Data Pool Offset (absolute from file start) |
+| Offset | Length (bytes) | Type       | Description                                          |
+| :----- | :------------- | :--------- | :--------------------------------------------------- |
+| 0      | 4              | ASCII      | Magic String: "TDFB"                                 |
+| 4      | 1              | `Uint8`    | Bundle Version: `6`                                  |
+| 5      | 4              | `Uint32LE` | Font Count (N): number of entries in the Font Index. |
+| 9      | 4              | `Uint32LE` | Base Count (B): number of base records.              |
+| 13     | 4              | `Uint32LE` | Derived Count (D): number of derived records.        |
 
-**3. Font Index Table:**
+Records are numbered 0 to M−1, where M = B + D ≤ 65535: base records first, then derived records.
 
-* Starts at `Font Index Table Offset`.
-* Contains `N` entries, where `N` is `Font Count`.
-* Fonts in this table are sorted **alphabetically by their `uniqueKey` string**.
-* **Font Index Table Entry Structure (8 bytes per entry):**
-    | Offset Relative to Entry Start | Length (bytes) | Type       | Description                                                           |
-    | :----------------------------- | :------------- | :--------- | :-------------------------------------------------------------------- |
-    | 0                              | 4              | `Uint32LE` | Unique Key String Offset (relative to the start of the String Pool) |
-    | 4                              | 4              | `Uint32LE` | Font Data Offset (relative to the start of the Font Data Pool)      |
+**3. Font Index:**
 
-**4. String Pool:**
+N entries, sorted by key. Each entry is:
 
-* Starts at `String Pool Offset`.
-* A concatenation of null-terminated UTF-8 strings (unique font keys), ordered corresponding to the Font Index Table.
+* **Key:** the font's unique key, a UTF-8 string terminated by a zero byte. The key is `<file name without extension>_<font name>`, with every character outside `[A-Za-z0-9_.-]` replaced by `_`.
+* **Record Index (`Uint16LE`):** the index of the font's record (0 to M−1). Several keys may name the same record.
 
-**5. Font Data Pool:**
+**4. Base Record Table:**
 
-* Starts at `Font Data Pool Offset`.
-* A concatenation of `N` Font Data Blocks, in the same order as the Font Index Table.
-* **Font Data Block Structure (variable length, for each font):**
-    1.  **Font Spacing (`Uint8`, 1 byte):** Letter spacing value (0-40), as defined in the TDF specification (0 means 1 less than raw TDF value, up to a max of 40).
-    2.  **Number of Pairs (`Uint8`, 1 byte):** `nPairs`, the count of unique (char, attr) pairs in this font's local palette. The maximum value is 254 (0xFE), as 0xFF is reserved as an RLE escape byte. Fonts exceeding 254 unique pairs cannot be represented in this version or require simplification by the encoder.
-    3.  **Pair Palette Data (`nPairs * 2` bytes):** A sequence of `nPairs` entries. The encoder sorts this palette canonically (e.g., first by `char_byte`, then by `attr_byte`) before writing to ensure deterministic output.
-        * Each entry is 2 bytes:
-            * `char_byte` (`Uint8`, 1 byte): The CP437 character code.
-            * `attr_byte` (`Uint8`, 1 byte): The color attribute.
-    4.  **Glyph Count (`Uint8`, 1 byte):** `G`, the number of glyphs defined for this font (typically up to 94, for ASCII 33-126).
-    5.  **Glyph Lookup Table (GLT) (`G * 3` bytes):** `G` entries, sorted by the `Character Code` of the glyph.
-        * **GLT Entry Structure (3 bytes):**
-            * Character Code (`Uint8`, 1 byte): ASCII value of the character (e.g., 33-126).
-            * Glyph Data Offset (`Uint16LE`, 2 bytes): Relative offset from the start of this font's "Glyph Data Table (GDT)" (see next section) to this specific glyph's data.
-    6.  **Glyph Data Table (GDT) (variable length):** Concatenated data for all `G` glyphs. The encoder typically writes these in the order corresponding to the GLT (i.e., sorted by character code) for simplicity.
-        * **Individual Glyph Data Structure (variable length):**
-            * Glyph Width (`Uint8`, 1 byte): The declared TDF width of the glyph in cells.
-            * Glyph Height (`Uint8`, 1 byte): The actual number of lines in the glyph, as determined by the encoder from the original TDF content (by counting newlines and the final terminator). This defines the height dimension for the `Glyph Width * Glyph Height` cell grid.
-            * **RLE-Encoded Cell Stream (variable length):** A stream of bytes representing `Glyph Width * Glyph Height` cells. Each byte is an index into this font's `Pair Palette Data`.
-                * If `byte_value < 0xFF`: This is a literal index into the `Pair Palette Data`. The pair at this index defines the cell's character and attribute.
-                * If `byte_value == 0xFF` (RLE Escape):
-                    * Next byte (`run_length_byte`, `Uint8`): The encoded run length. The actual number of cells this run represents is `run_length_byte + 3`. (This allows encoding runs of 3 to 258 cells).
-                    * Next byte (`pair_palette_index_to_repeat`, `Uint8`): The pair palette index that is repeated for the duration of the run. This index *must not* be `0xFF`.
+B records. Each record is:
+
+1.  **Spacing (`Uint8`):** letter spacing in cells (0–40); the TDF value minus 1.
+2.  **Number of Pairs (`Uint8`):** `nPairs`, the size of the pair palette (0–255).
+3.  **Pair Palette (`nPairs × 2` bytes):** `nPairs` entries of `char_byte` (`Uint8`, a CP437 code) followed by `attr_byte` (`Uint8`, a color attribute). Entries are ordered by descending number of cells that use them; ties are ordered by `char_byte`, then by `attr_byte`.
+4.  **Glyph Count (`Uint8`):** `G`, the number of glyphs in the record.
+5.  **Glyph Table (`G × 4` bytes):** one entry per glyph, ordered by character code:
+
+    | Offset | Type    | Description                                                                                   |
+    | :----- | :------ | :-------------------------------------------------------------------------------------------- |
+    | 0      | `Uint8` | Character Code (33–126).                                                                      |
+    | 1      | `Uint8` | Width: the glyph's declared TDF width in cells.                                               |
+    | 2      | `Uint8` | Height: the number of lines in the original TDF glyph.                                        |
+    | 3      | `Uint8` | Shared: `1` if the glyph's cells are those of the same character in the preceding base record; else `0`. |
+
+    A glyph may be marked shared only if the preceding base record has a glyph for the same character with the same width and height. The first base record has no shared glyphs.
+
+**5. Derived Record Table:**
+
+D records. A derived record has the glyphs of a base record, and its own spacing and palette. Each record is:
+
+1.  **Base Index (`Uint16LE`):** the index of a base record (0 to B−1).
+2.  **Spacing (`Uint8`):** as for base records.
+3.  **Attribute Map Size (`Uint8`):** `A`.
+4.  **Attribute Map (`A × 2` bytes):** `A` entries of `from_attr` (`Uint8`) followed by `to_attr` (`Uint8`). Attributes not listed map to themselves.
+5.  **Override Count (`Uint8`):** `O`.
+6.  **Overrides (`O × 3` bytes):** `O` entries of `pair_index` (`Uint8`), `char_byte` (`Uint8`) and `attr_byte` (`Uint8`).
+
+The derived palette has as many entries as the base palette. Entry j is `(char_byte_j, map(attr_byte_j))`, where `(char_byte_j, attr_byte_j)` is entry j of the base palette, unless an override with `pair_index = j` replaces it with its `(char_byte, attr_byte)`. The encoder chooses, for each base attribute, the derived attribute that most base entries with that attribute take (ties go to the lower attribute); overrides are listed in ascending `pair_index` order.
+
+**6. Cell Pool:**
+
+The cells of every base-record glyph whose Shared flag is `0`, concatenated in record order and, within a record, in Glyph Table order. Each glyph contributes `width × height` bytes in row-major order, and each byte is an index into its record's Pair Palette.
+
+A decoder finds a glyph's cells by keeping a running total: the cells of the first unshared glyph start at offset 0 of the Cell Pool, and each unshared glyph advances the total by `width × height`. A shared glyph uses the cell offset of the same character in the preceding base record, which may itself be shared. A glyph of a derived record uses the cell offset of the same glyph in its base record, and its indices refer to the derived palette.
 
 **Padding Pair Convention:**
-For handling TDF glyphs where lines are shorter than the `Glyph Width` (ragged glyphs), the encoder must conceptually "pad" these lines with a designated "padding pair" to ensure the RLE-Encoded Cell Stream always contains data for `Glyph Width * Glyph Height` cells. A common default for this padding pair is `(char_byte=0x20, attr_byte=0x00)` (space character, black-on-black color). If a font requires padding and this specific pair is not naturally present in its unique `(char, attr)` combinations, the encoder must add it to the font's `Pair Palette Data`. The encoder ensures the `Pair Palette Data` (including any added padding pair) is sorted canonically before being written.
+For TDF glyphs whose lines are shorter than the declared width, the encoder pads each short line with the pair `(char_byte = 0x20, attr_byte = 0x00)`: a space, black on black. The padding pair is counted, and placed in the palette, like any other pair.
+
+**Space Fill Convention:**
+When the renderer draws a space for which the font defines no glyph, it fills the cell with the background color of the palette entry with the lowest `(char_byte, attr_byte)`. This reproduces the v4 behavior, in which that entry was the first in the palette. For a derived record, this is computed from the derived palette.
 
 ---
