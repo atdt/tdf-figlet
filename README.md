@@ -22,6 +22,7 @@ The TDF-specific parsing (`tdfPacker.js`, `tdfRenderer.js`), the binary data bun
 * Configurable minimum width for space characters if a font lacks an explicit space glyph.
 * "Show All Fonts" mode with virtual rendering (via IntersectionObserver) to handle large font collections.
 * Option to filter displayed fonts based on whether they contain all characters in the input text.
+* Star fonts as favorites (saved in your browser's localStorage) and use "Favorites Only" to render text in just those fonts.
 
 ## Setup
 

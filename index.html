@@ -192,6 +192,12 @@
         .font-placeholder::before { content: attr(data-placeholder-text); }
         .error { color: #ff6b6b; font-weight: bold; }
 
+        /* --- Favorites --- */
+        .star-button { background: none; border: none; padding: 0 6px; font-size: 1.1em; line-height: 1; color: #777; }
+        .star-button:hover { background: none; color: #ccc; }
+        .star-button[aria-pressed="true"] { color: #f5c518; }
+        #favorite-button { border: 1px solid #555; background-color: #3a3a3a; padding: 5px 10px; }
+
         /* --- Footer --- */
         footer { padding: 10px 15px; text-align: center; font-size: 0.8em; color: #777; border-top: 1px solid #333; flex-shrink: 0; }
         footer a { color: #99b; text-decoration: none; }
@@ -208,6 +214,7 @@
         const DEBOUNCE_DELAY_MS = 300;
         const TDF_BUNDLE_URL = 'tdf-fonts.bmp';  // .bmp to force gzip
         const MAX_SCALED_CANVAS_DIMENSION = 10000;
+        const FAVORITES_STORAGE_KEY = 'tdf-figlet-favorites';
 
         // --- DOM Element References ---
         const elements = {
@@ -217,6 +224,8 @@
             canvasContainer: document.getElementById('canvas-container'),
             statusDiv: document.getElementById('status'),
             filterCharsCheckbox: document.getElementById('filter-chars'),
+            filterFavoritesCheckbox: document.getElementById('filter-favorites'),
+            favoriteButton: document.getElementById('favorite-button'),
             randomOrderCheckbox: document.getElementById('random-order'),
             minSpaceInput: document.getElementById('min-space'),
             lineSpacingInput: document.getElementById('line-spacing'),
@@ -230,6 +239,81 @@
         let currentFilteredFontList = [];
         let intersectionObserver = null;
         let textInputDebounceTimer = null;
+        const favorites = loadFavorites();
+
+        // --- Favorites (stored in this browser's localStorage) ---
+        function loadFavorites() {
+            try {
+                const stored = JSON.parse(localStorage.getItem(FAVORITES_STORAGE_KEY));
+                return new Set(Array.isArray(stored) ? stored : []);
+            } catch {
+                return new Set();
+            }
+        }
+
+        function saveFavorites() {
+            try {
+                localStorage.setItem(FAVORITES_STORAGE_KEY, JSON.stringify([...favorites]));
+            } catch (error) {
+                console.warn('Could not save favorites:', error);
+            }
+        }
+
+        function setStarState(button, fontKey) {
+            const isFavorite = favorites.has(fontKey);
+            button.textContent = isFavorite ? '★' : '☆';
+            button.setAttribute('aria-pressed', String(isFavorite));
+            button.title = isFavorite ? `Remove ${fontKey} from favorites` : `Add ${fontKey} to favorites`;
+        }
+
+        function createStarButton(fontKey) {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'star-button';
+            button.dataset.fontKey = fontKey;
+            setStarState(button, fontKey);
+            return button;
+        }
+
+        // Refresh every star, the dropdown, and the header button after a change.
+        function toggleFavorite(fontKey) {
+            if (!fontKey) return;
+            if (favorites.has(fontKey)) favorites.delete(fontKey);
+            else favorites.add(fontKey);
+            saveFavorites();
+            for (const button of document.querySelectorAll('.star-button')) {
+                if (button.dataset.fontKey === fontKey) setStarState(button, fontKey);
+            }
+            const dropdownChanged = elements.filterFavoritesCheckbox.checked;
+            updateFontDropdown();
+            updateFavoriteButton();
+            if (dropdownChanged && !intersectionObserver) renderSingleSelectedFont();
+        }
+
+        function updateFavoriteButton() {
+            const fontKey = elements.fontSelect.value;
+            elements.favoriteButton.disabled = !isAppReady || !fontKey;
+            setStarState(elements.favoriteButton, fontKey);
+            elements.favoriteButton.dataset.fontKey = fontKey;
+        }
+
+        // Fonts to offer, honoring the "Require Chars" and "Favorites Only" filters.
+        function getFontList(text) {
+            let fonts = (elements.filterCharsCheckbox.checked && tdfRenderer.isInitialized()) ?
+                tdfRenderer.filterFontsByText(text) : [...masterFontList];
+            if (elements.filterFavoritesCheckbox.checked) {
+                fonts = fonts.filter(fontKey => favorites.has(fontKey));
+            }
+            return fonts;
+        }
+
+        function emptyFontListMessage() {
+            if (elements.filterFavoritesCheckbox.checked && favorites.size === 0) {
+                return "No favorites yet";
+            }
+            const filtered = elements.filterCharsCheckbox.checked || elements.filterFavoritesCheckbox.checked;
+            return filtered ? "No matching fonts" : "No fonts available";
+        }
 
         // --- Utility Functions ---
         function setStatus(message, isError = false) {
@@ -246,6 +330,8 @@
             elements.fontSelect.disabled = !enabled;
             elements.showAllButton.disabled = !enabled;
             elements.filterCharsCheckbox.disabled = !enabled;
+            elements.filterFavoritesCheckbox.disabled = !enabled;
+            elements.favoriteButton.disabled = !enabled;
             elements.randomOrderCheckbox.disabled = !enabled;
             elements.minSpaceInput.disabled = !enabled;
             elements.lineSpacingInput.disabled = !enabled;
@@ -328,6 +414,7 @@
                 }
                 updateFontDropdown();
                 setControlsEnabled(true);
+                updateFavoriteButton();
                 setStatus(`Ready. ${masterFontList.length} fonts loaded.`);
                 await renderSingleSelectedFont();
             } catch (error) {
@@ -338,11 +425,9 @@
 
         function updateFontDropdown() {
             if (!isAppReady && masterFontList.length === 0) return;
-            const filterIsActive = elements.filterCharsCheckbox.checked;
             const currentText = elements.textInput.value;
             try {
-                currentFilteredFontList = (filterIsActive && tdfRenderer.isInitialized()) ?
-                    tdfRenderer.filterFontsByText(currentText) : [...masterFontList];
+                currentFilteredFontList = getFontList(currentText);
             } catch (filterError) {
                 console.error("Error during font filtering:", filterError);
                 currentFilteredFontList = [...masterFontList];
@@ -353,14 +438,15 @@
             if (currentFilteredFontList.length === 0) {
                 const option = document.createElement('option');
                 option.value = "";
-                option.textContent = filterIsActive ? "No matching fonts" : "No fonts available";
+                option.textContent = emptyFontListMessage();
                 elements.fontSelect.appendChild(option);
                 elements.fontSelect.disabled = true;
             } else {
                 currentFilteredFontList.forEach(fontKey => {
                     const option = document.createElement('option');
                     option.value = fontKey;
-                    option.textContent = fontKey.includes('_') ? fontKey.substring(fontKey.indexOf('_') + 1) : fontKey;
+                    const name = fontKey.includes('_') ? fontKey.substring(fontKey.indexOf('_') + 1) : fontKey;
+                    option.textContent = favorites.has(fontKey) ? `★ ${name}` : name;
                     elements.fontSelect.appendChild(option);
                 });
                 if (currentFilteredFontList.includes(previouslySelectedFont)) {
@@ -371,6 +457,11 @@
                 elements.fontSelect.disabled = false;
             }
             elements.showAllButton.disabled = currentFilteredFontList.length === 0 || !isAppReady;
+            updateFavoriteButton();
+        }
+
+        function setFontLabel(labelElement, fontKey, text) {
+            labelElement.replaceChildren(createStarButton(fontKey), document.createTextNode(text));
         }
 
         function displayRenderedCanvas(fontKey, canvasElement, scaleFactor) {
@@ -394,7 +485,7 @@
                 }
             }
             if(labelElement) {
-                labelElement.textContent = `${fontKey} (Rendered at ${scaleFactor}x)`;
+                setFontLabel(labelElement, fontKey, `${fontKey} (Rendered at ${scaleFactor}x)`);
                 labelElement.className = '';
             }
             canvasContainerDiv.innerHTML = '';
@@ -486,7 +577,7 @@
                 const fontBlock = document.createElement('div');
                 fontBlock.className = 'font-block';
                 const label = document.createElement('p');
-                label.textContent = `${uniqueFontKey} (${currentScaleFactor}x, LS: ${additionalLineSpacing}px)`;
+                setFontLabel(label, uniqueFontKey, `${uniqueFontKey} (${currentScaleFactor}x, LS: ${additionalLineSpacing}px)`);
                 fontBlock.appendChild(label);
                 fontBlock.appendChild(finalCanvas);
                 if (intersectionObserver) intersectionObserver.unobserve(placeholderElement);
@@ -516,17 +607,16 @@
                 setStatus('Please enter text first.');
                 clearAllFontsView(); return;
             }
-            const filterIsActive = elements.filterCharsCheckbox.checked;
             const useRandomOrder = elements.randomOrderCheckbox.checked;
             let fontsToDisplay;
             try {
-                fontsToDisplay = filterIsActive ? tdfRenderer.filterFontsByText(textToRender) : [...masterFontList];
+                fontsToDisplay = getFontList(textToRender);
             } catch (filterError) {
                 console.error("Error filtering for 'Show All':", filterError);
                 setStatus("Error filtering fonts.", true); return;
             }
             if (fontsToDisplay.length === 0) {
-                setStatus(filterIsActive ? "No fonts match characters." : "No fonts available.", true);
+                setStatus(`${emptyFontListMessage()}.`, true);
                 clearAllFontsView(); return;
             }
             if (useRandomOrder) shuffleArray(fontsToDisplay);
@@ -567,7 +657,18 @@
                 updateFontDropdown();
                 if (!intersectionObserver) renderSingleSelectedFont();
             });
+            elements.filterFavoritesCheckbox.addEventListener('change', () => {
+                updateFontDropdown();
+                if (intersectionObserver) displayAllFontsAsPlaceholders();
+                else renderSingleSelectedFont();
+            });
             elements.randomOrderCheckbox.addEventListener('change', () => {});
+
+            // One delegated handler covers the header button and every rendered font's star.
+            document.addEventListener('click', event => {
+                const button = event.target.closest('.star-button');
+                if (button && !button.disabled) toggleFavorite(button.dataset.fontKey);
+            });
 
             const reRenderOnChange = () => { // Consolidated handler
                 if (intersectionObserver) displayAllFontsAsPlaceholders();
@@ -576,7 +677,10 @@
 
             elements.minSpaceInput.addEventListener('change', reRenderOnChange);
             elements.lineSpacingInput.addEventListener('change', reRenderOnChange);
-            elements.fontSelect.addEventListener('change', renderSingleSelectedFont); // Font select always renders single
+            elements.fontSelect.addEventListener('change', () => { // Font select always renders single
+                updateFavoriteButton();
+                renderSingleSelectedFont();
+            });
             elements.scaleSelect.addEventListener('change', reRenderOnChange);
 
             // Attach listeners to radio button labels (which now contain SVGs)
@@ -609,11 +713,16 @@
         <select id="font-select" title="Select Font" disabled>
             <option value="">Loading fonts...</option>
         </select>
+        <button id="favorite-button" class="star-button" type="button" aria-pressed="false" title="Add to favorites" disabled>☆</button>
         <button id="show-all-button" disabled title="Display All Fonts (Renders on Scroll)">Show All Fonts</button>
 
         <div class="option-group">
             <input type="checkbox" id="filter-chars" title="Only show fonts that include every character in the input text (excluding space)" disabled>
             <label for="filter-chars">Require Chars</label>
+        </div>
+        <div class="option-group">
+            <input type="checkbox" id="filter-favorites" title="Only show fonts you have starred (saved in this browser)" disabled>
+            <label for="filter-favorites">Favorites Only</label>
         </div>
         <div class="option-group">
             <input type="checkbox" id="random-order" title="Display 'Show All' list in random order" disabled>
