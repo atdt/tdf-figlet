@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>TDF Figlet Designer</title>
+    <!-- crossorigin must match tdfRenderer's fetch() or the browser downloads the bundle twice. -->
+    <link rel="preload" href="tdf-fonts.bmp" as="fetch" crossorigin>
     <style>
         /* --- Base Styles --- */
         body {
@@ -586,7 +588,8 @@
 
             elements.textInput.addEventListener('input', () => {
                 clearTimeout(textInputDebounceTimer);
-                updateFontDropdown();
+                // Without the character filter, the font list does not depend on the text.
+                if (elements.filterCharsCheckbox.checked) updateFontDropdown();
                 textInputDebounceTimer = setTimeout(() => {
                     if (!intersectionObserver) renderSingleSelectedFont();
                 }, DEBOUNCE_DELAY_MS);

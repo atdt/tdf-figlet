@@ -34,6 +34,9 @@
     [255, 255, 85, 255], // 14 Yellow
     [255, 255, 255, 255], // 15 White
   ];
+  // TdfColors as pixels for a Uint32Array view of ImageData, which assumes a little-endian
+  // platform: byte order R, G, B, A.
+  const TdfPixels = TdfColors.map(([r, g, b, a]) => ((a << 24) | (b << 16) | (g << 8) | r) >>> 0);
 
   // --- CP437 Font Data ---
 
@@ -89,71 +92,26 @@
   // --- Utilities: CP437 Character Rendering ---
 
   /**
-   * Fills an ImageData object with a specified RGBA color.
-   * @param {ImageData} imageData - The ImageData object to fill.
-   * @param {Array<number>} colorRgba - An array [r, g, b, a] representing the color.
-   */
-  function _fillImageData(imageData, colorRgba) {
-    const data = imageData.data;
-    const [r, g, b, a] = colorRgba;
-    for (let i = 0; i < data.length; i += 4) {
-      data[i] = r;
-      data[i + 1] = g;
-      data[i + 2] = b;
-      data[i + 3] = a;
-    }
-  }
-
-  /**
-   * Draws a single CP437 character onto a canvas context using preloaded bitmap data.
-   * @param {CanvasRenderingContext2D} context - The 2D rendering context of the canvas.
+   * Draws a single CP437 character into a pixel buffer using preloaded bitmap data.
+   * @param {Uint32Array} pixels - The pixel buffer, one RGBA pixel per element (see TdfPixels).
+   * @param {number} width - Width of the pixel buffer in pixels.
    * @param {number} charCode - The CP437 character code (0-255).
-   * @param {number} canvasX - The target X-coordinate on the canvas (top-left of character).
-   * @param {number} canvasY - The target Y-coordinate on the canvas (top-left of character).
-   * @param {Array<number>} fgColorRgba - Foreground color as [r, g, b, a].
-   * @param {Array<number>} bgColorRgba - Background color as [r, g, b, a].
+   * @param {number} pixelX - X-coordinate of the character's top-left pixel within the buffer.
+   * @param {number} pixelY - Y-coordinate of the character's top-left pixel within the buffer.
+   * @param {number} fgPixel - Foreground color, an element of TdfPixels.
+   * @param {number} bgPixel - Background color, an element of TdfPixels.
    */
-  function drawCp437Char(context, charCode, canvasX, canvasY, fgColorRgba, bgColorRgba) {
-    if (typeof context.createImageData !== "function") {
-      console.warn("tdfRenderer: context.createImageData is not available. Cannot draw CP437 char.");
-      return;
-    }
-
-    let imageData;
-    try {
-      imageData = context.createImageData(CharWidth, CharHeight);
-    } catch (e) {
-      console.warn("tdfRenderer: context.createImageData failed. Cannot draw CP437 char.", e);
-      return;
-    }
-
-    const data = imageData.data;
-    const code = charCode & 0xff; // Ensure charCode is within 0-255 range.
-    const bitmap = cp437FontData[code]; // Get pixel data from preloaded CP437 font.
-
-    if (!bitmap || bitmap.length < CharHeight) {
-      // If character bitmap is undefined or incomplete, fill the cell with background color.
-      // Use transparent black if the provided background color is itself transparent.
-      const fillColor = bgColorRgba[3] > 0 ? bgColorRgba : [0, 0, 0, 0];
-      _fillImageData(imageData, fillColor);
-    } else {
-      // Render the character using its bitmap data.
-      for (let row = 0; row < CharHeight; row++) {
-        const rowBits = bitmap[row] || 0x00; // Default to an empty row if bitmap data is sparse.
-        for (let col = 0; col < CharWidth; col++) {
-          const offset = (row * CharWidth + col) * 4; // Calculate pixel offset in ImageData.
-          const isForegroundPixel = (rowBits >> (7 - col)) & 1; // Check if current pixel is foreground.
-          const [r, g, b, a] = isForegroundPixel ? fgColorRgba : bgColorRgba;
-
-          data[offset] = r;
-          data[offset + 1] = g;
-          data[offset + 2] = b;
-          data[offset + 3] = a;
-        }
+  function drawCp437Char(pixels, width, charCode, pixelX, pixelY, fgPixel, bgPixel) {
+    const bitmap = cp437FontData[charCode & 0xff];
+    // A missing or incomplete bitmap fills the cell with the background color.
+    const isBlank = !bitmap || bitmap.length < CharHeight;
+    for (let row = 0; row < CharHeight; row++) {
+      const rowBits = isBlank ? 0 : bitmap[row] || 0;
+      let offset = (pixelY + row) * width + pixelX;
+      for (let col = 0; col < CharWidth; col++, offset++) {
+        pixels[offset] = (rowBits >> (7 - col)) & 1 ? fgPixel : bgPixel;
       }
     }
-    // Place the rendered character onto the canvas. Floor coordinates for pixel-perfect drawing.
-    context.putImageData(imageData, Math.floor(canvasX), Math.floor(canvasY));
   }
 
   // --- Utilities: TDF Glyph Lookup (for Bundle v6) ---
@@ -285,55 +243,32 @@
   /**
    * Renders a single TDF glyph (represented as a dense grid of cells) onto the canvas.
    * The input `glyphCompactData` is a flat array: [width, height, char1, attr1, char2, attr2, ...].
+   * The cells tile the glyph's rectangle, so the glyph is drawn into one ImageData and placed
+   * with one putImageData call.
    * @param {CanvasRenderingContext2D} context - The canvas rendering context.
    * @param {Array<number>} glyphCompactData - Parsed glyph data.
    * @param {number} baseX - Starting X coordinate on canvas for the top-left of this TDF glyph.
    * @param {number} baseY - Starting Y coordinate on canvas for the top-left of this TDF glyph.
    */
   function _renderTdfGlyphOnCanvas(context, glyphCompactData, baseX, baseY) {
-    if (!glyphCompactData || glyphCompactData.length < 2) {
-      console.warn("tdfRenderer: Attempted to render glyph with insufficient compact data (missing width/height).");
-      return;
-    }
-
     const glyphWidthChars = glyphCompactData[0];
     const glyphHeightLines = glyphCompactData[1];
-    const expectedCells = glyphWidthChars * glyphHeightLines;
+    const cellCount = glyphWidthChars * glyphHeightLines;
+    if (cellCount === 0) return;
 
-    // Cell data starts at index 2 of glyphCompactData. Each cell uses 2 array items (char, attr).
-    if (glyphCompactData.length < 2 + expectedCells * 2 && expectedCells > 0) {
-      console.warn(
-        `tdfRenderer: Glyph compact data stream is shorter (${glyphCompactData.length - 2} items) than expected by width*height (${expectedCells * 2} items). Glyph rendering may be truncated.`,
-      );
-      // Proceed to render what's available, up to the shorter length.
+    const imageData = context.createImageData(glyphWidthChars * CharWidth, glyphHeightLines * CharHeight);
+    const { data, width } = imageData;
+    const pixels = new Uint32Array(data.buffer, data.byteOffset, data.length / 4);
+    for (let i = 0; i < cellCount; i++) {
+      const charByte = glyphCompactData[2 + i * 2];
+      const attrByte = glyphCompactData[3 + i * 2];
+      const bgPixel = TdfPixels[(attrByte >> 4) & 0x07]; // 3 bits of background.
+      const fgPixel = TdfPixels[attrByte & 0x0f]; // 4 bits of foreground.
+      const pixelX = (i % glyphWidthChars) * CharWidth;
+      const pixelY = Math.floor(i / glyphWidthChars) * CharHeight;
+      drawCp437Char(pixels, width, charByte, pixelX, pixelY, fgPixel, bgPixel);
     }
-
-    for (let i = 0; i < expectedCells; i++) {
-      const dataIndex = 2 + i * 2;
-      // Ensure we don't read past the end of available cell data.
-      if (dataIndex + 1 >= glyphCompactData.length) break;
-
-      const charByte = glyphCompactData[dataIndex];
-      const attrByte = glyphCompactData[dataIndex + 1];
-
-      // Calculate cell's position within the glyph's own grid.
-      const currentGlyphCellX = i % glyphWidthChars;
-      const currentGlyphCellY = Math.floor(i / glyphWidthChars);
-
-      // Calculate the absolute canvas position for this cell.
-      const canvasX = baseX + currentGlyphCellX * CharWidth;
-      const canvasY = baseY + currentGlyphCellY * CharHeight;
-
-      // Decode color attribute byte.
-      const bgIndex = (attrByte >> 4) & 0x07; // TDF uses 3 bits for Background (0-7).
-      const fgIndex = attrByte & 0x0f; // TDF uses 4 bits for Foreground (0-15).
-
-      // Get RGBA colors from pre-defined TdfColors palette.
-      const bgColor = TdfColors[bgIndex] || TdfColors[0]; // Default to black if index is out of bounds.
-      const fgColor = TdfColors[fgIndex] || TdfColors[7]; // Default to light grey if index is out of bounds.
-
-      drawCp437Char(context, charByte, canvasX, canvasY, fgColor, bgColor);
-    }
+    context.putImageData(imageData, Math.floor(baseX), Math.floor(baseY));
   }
 
   /**
