@@ -21,28 +21,38 @@
         }
 
         /* --- Header & Controls --- */
+        :root { --control-height: 32px; }
+
         header.controls {
             background-color: #2a2a2a;
             padding: 10px 15px;
             border-bottom: 1px solid #444;
             display: flex;
-            flex-wrap: wrap;
-            gap: 10px 15px;
-            align-items: center;
-            justify-content: center;
+            flex-direction: column;
+            gap: 8px;
             width: 100%;
             box-sizing: border-box;
             z-index: 10;
             flex-shrink: 0;
         }
 
+        /* Row 1 holds the text, font and actions; row 2 the render options. */
+        .controls-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px 12px;
+            align-items: center;
+            justify-content: center;
+        }
+
         /* --- Form Elements --- */
         textarea {
-            height: 38px;
-            flex-basis: auto;
-            flex-grow: 1;
-            min-width: 180px;
-            padding: 8px;
+            height: var(--control-height);
+            min-height: var(--control-height);
+            box-sizing: border-box;
+            flex: 1 1 180px;
+            max-width: 480px;
+            padding: 6px 8px;
             border-radius: 3px;
             border: 1px solid #555;
             background-color: #111;
@@ -50,21 +60,41 @@
             font-family: inherit;
             resize: vertical;
             font-size: 0.9em;
-            line-height: 1.4;
+            line-height: 1.2;
         }
 
         select,
         button,
-        input[type="number"],
-        label { /* Default label styling, will be overridden for icon labels */
+        input[type="number"] {
+            height: var(--control-height);
+            box-sizing: border-box;
             font-size: 0.85em;
-            padding: 7px 10px;
+            padding: 0 10px;
             border-radius: 3px;
             border: 1px solid #555;
             background-color: #3a3a3a;
             color: #eee;
             font-family: inherit;
             vertical-align: middle;
+        }
+
+        /* Draw our own chevron so its position is the same in every browser. */
+        select {
+            appearance: none;
+            -webkit-appearance: none;
+            -moz-appearance: none;
+            padding-right: 28px;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23ccc' stroke-width='1.5'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 10px center;
+            cursor: pointer;
+        }
+        select:disabled { cursor: not-allowed; opacity: 0.6; }
+
+        label {
+            font-size: 0.85em;
+            color: #eee;
+            font-family: inherit;
         }
 
         button {
@@ -74,42 +104,32 @@
         button:hover { background-color: #4a4a4a; }
         button:disabled { cursor: not-allowed; opacity: 0.6; }
 
-        /* General label reset for non-icon labels */
-        label.text-label {
-            border: none;
-            background: none;
-            padding: 0 5px 0 0;
-            cursor: default;
-        }
-
-        input[type="checkbox"] { /* Keep checkbox style */
-            margin-right: 4px;
+        input[type="checkbox"] {
+            margin: 0;
             cursor: pointer;
-            vertical-align: middle;
         }
         label[for^="filter-"],
         label[for^="random-"] { /* Labels for checkboxes */
             cursor: pointer;
-            padding-right: 8px;
-            border: none;
-            background: none;
         }
 
-
         #font-select { min-width: 180px; max-width: 220px; flex-grow: 1; }
-        #min-space,
-        #line-spacing { width: 3.5em; padding: 7px; }
-        #scale-factor { width: 5em; }
 
         .option-group {
             display: flex;
             align-items: center;
             gap: 6px;
             flex-wrap: nowrap;
-            padding: 3px 6px;
+            height: var(--control-height);
+            box-sizing: border-box;
+            padding: 0 8px;
             border: 1px solid #444;
             border-radius: 3px;
         }
+        .option-group input[type="number"],
+        .option-group select { height: 24px; }
+        #min-space,
+        #line-spacing { width: 3.5em; padding: 0 6px; }
 
         /* --- Text Align Icon Controls --- */
         .align-controls-group { /* Specific group for align icons */
@@ -129,7 +149,9 @@
         }
 
         .align-controls-group label { /* Styling for icon labels */
-            padding: 6px 8px; /* Adjust padding for icon size */
+            height: 100%;
+            box-sizing: border-box;
+            padding: 0 8px; /* Adjust padding for icon size */
             margin: 0; /* Remove default label margins */
             cursor: pointer;
             background-color: #3a3a3a;
@@ -196,7 +218,7 @@
         .star-button { background: none; border: none; padding: 0 6px; font-size: 1.1em; line-height: 1; color: #777; }
         .star-button:hover { background: none; color: #ccc; }
         .star-button[aria-pressed="true"] { color: #f5c518; }
-        #favorite-button { border: 1px solid #555; background-color: #3a3a3a; padding: 5px 10px; }
+        #favorite-button { border: 1px solid #555; background-color: #3a3a3a; width: var(--control-height); padding: 0; }
 
         /* --- Footer --- */
         footer { padding: 10px 15px; text-align: center; font-size: 0.8em; color: #777; border-top: 1px solid #333; flex-shrink: 0; }
@@ -709,12 +731,15 @@
 </head>
 <body>
     <header class="controls">
+      <div class="controls-row">
         <textarea id="text-input" placeholder="Enter text..." title="Text to Render">ANSI LIVES</textarea>
         <select id="font-select" title="Select Font" disabled>
             <option value="">Loading fonts...</option>
         </select>
         <button id="favorite-button" class="star-button" type="button" aria-pressed="false" title="Add to favorites" disabled>☆</button>
         <button id="show-all-button" disabled title="Display All Fonts (Renders on Scroll)">Show All Fonts</button>
+      </div>
+      <div class="controls-row">
 
         <div class="option-group">
             <input type="checkbox" id="filter-chars" title="Only show fonts that include every character in the input text (excluding space)" disabled>
@@ -766,13 +791,14 @@
         <div class="option-group">
             <label class="text-label" for="scale-factor">Scale:</label>
             <select id="scale-factor" title="Scale output size (e.g., 2x = double size)" disabled>
-                <option value="1" selected>1x (Original)</option>
+                <option value="1" selected>1x</option>
                 <option value="2">2x</option>
                 <option value="3">3x</option>
                 <option value="4">4x</option>
                 <option value="5">5x</option>
             </select>
         </div>
+      </div>
     </header>
 
     <main>
